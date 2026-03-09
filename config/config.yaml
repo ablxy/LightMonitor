@@ -1,0 +1,45 @@
+# LightMonitor - Video Stream AI Detection Platform Configuration
+
+streams:
+  - id: "stream-01"
+    name: "Front Gate Camera"
+    rtsp_url: "rtsp://192.168.1.100:554/stream1"
+    enabled: true
+    frame_extraction:
+      fps: 1                  # Extract 1 frame per second
+    labels:
+      - "person"
+      - "car"
+
+  - id: "stream-02"
+    name: "Warehouse Camera"
+    rtsp_url: "rtsp://192.168.1.101:554/stream1"
+    enabled: true
+    frame_extraction:
+      interval_s: 5           # Extract 1 frame every 5 seconds
+    labels:
+      - "fire"
+      - "smoke"
+      - "person"
+
+detection:
+  model_url: "http://localhost:8501/v1/models/yolo:predict"
+  auth:
+    type: "api_key"           # Options: api_key, bearer, none
+    token: ""
+  confidence_threshold: 0.5
+
+alarm:
+  enabled: true
+  webhook_url: "http://external-alarm-system/api/v1/alerts"
+  auth:
+    type: "bearer"
+    token: ""
+
+grpc:
+  detection_host: "localhost"
+  detection_port: 50051
+
+server:
+  host: "0.0.0.0"
+  port: 8000

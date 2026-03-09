@@ -1,0 +1,42 @@
+syntax = "proto3";
+
+package lightmonitor;
+
+// Service for streaming video frames from Monitor to Detection module.
+service FrameStreamService {
+  // Push a single extracted frame for detection.
+  rpc PushFrame(FrameRequest) returns (PushResponse);
+}
+
+// A single video frame with metadata.
+message FrameRequest {
+  string stream_id = 1;        // Unique stream identifier
+  string stream_name = 2;      // Human-readable stream name
+  bytes  image_data = 3;       // Raw image bytes (JPEG-encoded)
+  int64  timestamp_ms = 4;     // Unix timestamp in milliseconds
+  int32  width = 5;            // Frame width in pixels
+  int32  height = 6;           // Frame height in pixels
+  repeated string target_labels = 7;  // Labels to detect for this stream
+}
+
+// Response after processing a frame.
+message PushResponse {
+  bool   success = 1;
+  string message = 2;
+  repeated Detection detections = 3;
+}
+
+// A single detection result.
+message Detection {
+  string label = 1;            // Detected object label
+  float  confidence = 2;       // Confidence score [0, 1]
+  BoundingBox bbox = 3;        // Bounding box coordinates
+}
+
+// Bounding box in pixel coordinates.
+message BoundingBox {
+  float x_min = 1;
+  float y_min = 2;
+  float x_max = 3;
+  float y_max = 4;
+}
