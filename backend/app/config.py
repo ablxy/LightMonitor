@@ -49,9 +49,22 @@ class AlarmConfig(BaseModel):
     auth: AuthConfig = AuthConfig()
 
 
-class GrpcConfig(BaseModel):
-    detection_host: str = "localhost"
-    detection_port: int = 50051
+class QueueConfig(BaseModel):
+    maxsize: int = 100
+
+
+class MinioConfig(BaseModel):
+    endpoint: str = "localhost:9000"
+    access_key: str = "minioadmin"
+    secret_key: str = "minioadmin"
+    bucket: str = "lightmonitor"
+    secure: bool = False
+
+
+class LoggingConfig(BaseModel):
+    jsonl_path: str = "logs/detections.jsonl"
+    rotate_when: str = "midnight"
+    backup_count: int = 7
 
 
 class ServerConfig(BaseModel):
@@ -63,7 +76,9 @@ class AppConfig(BaseModel):
     streams: list[StreamConfig] = Field(default_factory=list)
     detection: DetectionConfig = DetectionConfig()
     alarm: AlarmConfig = AlarmConfig()
-    grpc: GrpcConfig = GrpcConfig()
+    queue: QueueConfig = QueueConfig()
+    minio: MinioConfig = MinioConfig()
+    logging: LoggingConfig = LoggingConfig()
     server: ServerConfig = ServerConfig()
 
 

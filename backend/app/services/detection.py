@@ -1,19 +1,24 @@
-"""Detection Service – gRPC server that receives frames and runs AI inference."""
+"""Detection Service – async queue consumer that runs AI inference, uploads to
+MinIO, and persists results as JSONL."""
 
 from __future__ import annotations
 
 import asyncio
 import base64
 import collections
+import datetime
+import io
+import json
 import logging
+import os
 import time
 from typing import TYPE_CHECKING
 
-import grpc
 import httpx
-from grpc import aio as grpc_aio
+from minio import Minio
+from minio.error import S3Error
 
-from app.models import BoundingBox, DetectionResult, FrameResult
+from app.models import BoundingBox, DetectionResult, FrameResult, HistoryRecord, Task
 
 if TYPE_CHECKING:
     from app.config import AppConfig
@@ -26,16 +31,73 @@ MAX_RESULTS_PER_STREAM = 50
 
 
 class DetectionService:
-    """Manages frame processing, AI inference invocation, and result storage."""
+    """Consumes frames from the async queue, runs inference, stores results."""
 
-    def __init__(self, config: AppConfig, alarm_service: AlarmService) -> None:
+    def __init__(
+        self,
+        config: AppConfig,
+        alarm_service: AlarmService,
+        queue: asyncio.Queue,
+    ) -> None:
         self._config = config
         self._alarm = alarm_service
+        self._queue = queue
         self._http = httpx.AsyncClient(timeout=30.0)
+        self._consumer_task: asyncio.Task | None = None
+
+        # Minio client (synchronous SDK, calls offloaded to thread)
+        mc = config.minio
+        self._minio = Minio(
+            mc.endpoint,
+            access_key=mc.access_key,
+            secret_key=mc.secret_key,
+            secure=mc.secure,
+        )
+        self._bucket = mc.bucket
+
+        # JSONL log path
+        self._jsonl_path = config.logging.jsonl_path
+
         # stream_id -> deque of FrameResult
         self.results: dict[str, collections.deque[FrameResult]] = {}
         for s in config.streams:
             self.results[s.id] = collections.deque(maxlen=MAX_RESULTS_PER_STREAM)
+
+    # ------------------------------------------------------------------
+    # Lifecycle
+    # ------------------------------------------------------------------
+
+    async def start(self) -> None:
+        """Start the background queue consumer task."""
+        self._consumer_task = asyncio.create_task(self._consume_loop())
+
+    async def close(self) -> None:
+        if self._consumer_task:
+            self._consumer_task.cancel()
+            try:
+                await self._consumer_task
+            except asyncio.CancelledError:
+                pass
+        await self._http.aclose()
+
+    # ------------------------------------------------------------------
+    # Consumer loop
+    # ------------------------------------------------------------------
+
+    async def _consume_loop(self) -> None:
+        """Continuously consume tasks from the queue and process them."""
+        while True:
+            task: Task = await self._queue.get()
+            try:
+                await self._process_task(task)
+            except Exception:
+                logger.exception(
+                    "Unhandled error processing task %s for stream %s",
+                    task.task_id,
+                    task.stream_id,
+                )
+            finally:
+                self._queue.task_done()
 
     # ------------------------------------------------------------------
     # AI model invocation
@@ -67,19 +129,73 @@ class DetectionService:
             return []
 
     # ------------------------------------------------------------------
+    # MinIO helpers
+    # ------------------------------------------------------------------
+
+    async def _ensure_bucket(self) -> None:
+        """Create the MinIO bucket if it does not exist (thread-offloaded)."""
+        def _create():
+            try:
+                if not self._minio.bucket_exists(self._bucket):
+                    self._minio.make_bucket(self._bucket)
+            except S3Error:
+                logger.exception("Failed to ensure MinIO bucket %s", self._bucket)
+
+        await asyncio.to_thread(_create)
+
+    async def _upload_image(self, task: Task) -> str:
+        """Upload image bytes to MinIO and return a presigned URL."""
+        object_name = (
+            f"{task.stream_id}/{task.timestamp_ms}_{task.task_id}.jpg"
+        )
+
+        def _upload():
+            try:
+                self._minio.put_object(
+                    self._bucket,
+                    object_name,
+                    io.BytesIO(task.image_data),
+                    length=len(task.image_data),
+                    content_type="image/jpeg",
+                )
+                # Return a presigned URL valid for 7 days
+                return self._minio.presigned_get_object(
+                    self._bucket,
+                    object_name,
+                    expires=datetime.timedelta(days=7),
+                )
+            except S3Error:
+                logger.exception(
+                    "MinIO upload failed for task %s (stream %s)",
+                    task.task_id,
+                    task.stream_id,
+                )
+                return ""
+
+        return await asyncio.to_thread(_upload)
+
+    # ------------------------------------------------------------------
+    # JSONL persistence
+    # ------------------------------------------------------------------
+
+    async def _write_jsonl(self, record: HistoryRecord) -> None:
+        """Append a HistoryRecord as a JSONL line (thread-offloaded)."""
+        line = record.model_dump_json() + "\n"
+
+        def _append():
+            os.makedirs(os.path.dirname(self._jsonl_path) or ".", exist_ok=True)
+            with open(self._jsonl_path, "a", encoding="utf-8") as fh:
+                fh.write(line)
+
+        await asyncio.to_thread(_append)
+
+    # ------------------------------------------------------------------
     # Frame processing pipeline
     # ------------------------------------------------------------------
 
-    async def process_frame(
-        self,
-        stream_id: str,
-        stream_name: str,
-        image_data: bytes,
-        timestamp_ms: int,
-        target_labels: list[str],
-    ) -> FrameResult:
-        """Run inference, filter by labels & threshold, and store result."""
-        raw_dets = await self._call_model(image_data)
+    async def _process_task(self, task: Task) -> None:
+        """Run inference; on a hit, upload to MinIO and persist JSONL."""
+        raw_dets = await self._call_model(task.image_data)
 
         threshold = self._config.detection.confidence_threshold
         detections: list[DetectionResult] = []
@@ -94,31 +210,45 @@ class DetectionService:
             detections.append(DetectionResult(label=label, confidence=conf, bbox=bbox))
 
         # Determine if any detection matches a target label -> alarm
-        alarmed = any(det.label in target_labels for det in detections)
+        alarmed = any(det.label in task.target_labels for det in detections)
 
-        b64_image = base64.b64encode(image_data).decode()
+        b64_image = base64.b64encode(task.image_data).decode()
         frame_result = FrameResult(
-            stream_id=stream_id,
-            stream_name=stream_name,
-            timestamp_ms=timestamp_ms,
+            stream_id=task.stream_id,
+            stream_name=task.stream_name,
+            timestamp_ms=task.timestamp_ms,
             detections=detections,
             alarmed=alarmed,
             image_base64=b64_image,
         )
 
-        # Store
-        if stream_id not in self.results:
-            self.results[stream_id] = collections.deque(maxlen=MAX_RESULTS_PER_STREAM)
-        self.results[stream_id].appendleft(frame_result)
+        # Store in-memory ring buffer
+        if task.stream_id not in self.results:
+            self.results[task.stream_id] = collections.deque(
+                maxlen=MAX_RESULTS_PER_STREAM
+            )
+        self.results[task.stream_id].appendleft(frame_result)
 
-        # Push alarm if needed
         if alarmed:
-            asyncio.create_task(self._alarm.push(frame_result))
+            # Upload image to MinIO
+            await self._ensure_bucket()
+            image_url = await self._upload_image(task)
 
-        return frame_result
+            # Persist JSONL record
+            record = HistoryRecord(
+                task_id=task.task_id,
+                timestamp_ms=task.timestamp_ms,
+                stream_id=task.stream_id,
+                stream_name=task.stream_name,
+                detections=detections,
+                image_url=image_url,
+            )
+            await self._write_jsonl(record)
 
-    async def close(self) -> None:
-        await self._http.aclose()
+            # Trigger alarm with MinIO URL
+            asyncio.create_task(
+                self._alarm.push(frame_result, image_url=image_url)
+            )
 
     # ------------------------------------------------------------------
     # Query helpers
@@ -129,78 +259,3 @@ class DetectionService:
         if not dq:
             return []
         return list(dq)[:limit]
-
-
-# ======================================================================
-# gRPC servicer implementation
-# ======================================================================
-
-# Import generated stubs lazily so the module is importable even when
-# the proto files haven't been compiled yet (e.g. during config-only tests).
-_pb2: object | None = None
-_pb2_grpc: object | None = None
-
-
-def _ensure_grpc_stubs():  # noqa: ANN202
-    global _pb2, _pb2_grpc
-    if _pb2 is None:
-        from app.grpc_generated import frame_stream_pb2, frame_stream_pb2_grpc
-        _pb2 = frame_stream_pb2
-        _pb2_grpc = frame_stream_pb2_grpc
-
-
-class FrameStreamServicer:
-    """gRPC servicer that delegates to DetectionService."""
-
-    def __init__(self, detection_service: DetectionService) -> None:
-        self._det = detection_service
-
-    async def PushFrame(self, request, context):  # noqa: N802
-        _ensure_grpc_stubs()
-        result = await self._det.process_frame(
-            stream_id=request.stream_id,
-            stream_name=request.stream_name,
-            image_data=bytes(request.image_data),
-            timestamp_ms=request.timestamp_ms,
-            target_labels=list(request.target_labels),
-        )
-        det_msgs = []
-        for d in result.detections:
-            bbox_msg = None
-            if d.bbox:
-                bbox_msg = _pb2.BoundingBox(
-                    x_min=d.bbox.x_min,
-                    y_min=d.bbox.y_min,
-                    x_max=d.bbox.x_max,
-                    y_max=d.bbox.y_max,
-                )
-            det_msgs.append(
-                _pb2.Detection(
-                    label=d.label,
-                    confidence=d.confidence,
-                    bbox=bbox_msg,
-                )
-            )
-        return _pb2.PushResponse(
-            success=True,
-            message="OK",
-            detections=det_msgs,
-        )
-
-
-async def start_grpc_server(
-    detection_service: DetectionService,
-    host: str = "0.0.0.0",
-    port: int = 50051,
-) -> grpc_aio.Server:
-    """Start the gRPC server for the Detection Service."""
-    _ensure_grpc_stubs()
-    server = grpc_aio.server()
-    _pb2_grpc.add_FrameStreamServiceServicer_to_server(
-        FrameStreamServicer(detection_service), server
-    )
-    listen_addr = f"{host}:{port}"
-    server.add_insecure_port(listen_addr)
-    await server.start()
-    logger.info("gRPC Detection server listening on %s", listen_addr)
-    return server

@@ -1,5 +1,8 @@
 """Tests for REST API endpoints (tasks router)."""
 
+import asyncio
+import json
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -37,7 +40,7 @@ def config(tmp_path):
         ],
         "detection": {"model_url": "", "confidence_threshold": 0.5},
         "alarm": {"enabled": False},
-        "grpc": {"detection_host": "localhost", "detection_port": 50051},
+        "queue": {"maxsize": 10},
     }
     path = tmp_path / "cfg.yaml"
     path.write_text(yaml.dump(cfg))
@@ -45,19 +48,22 @@ def config(tmp_path):
 
 
 @pytest.fixture
-def client(config):
+def client(config, tmp_path):
+    queue = asyncio.Queue(maxsize=config.queue.maxsize)
     alarm = AlarmService(config.alarm)
-    detection = DetectionService(config, alarm)
-    monitor = MonitorService(config)
+    detection = DetectionService(config, alarm, queue)
+    monitor = MonitorService(config, queue)
 
+    jsonl_path = str(tmp_path / "detections.jsonl")
     app = FastAPI()
-    init_router(monitor, detection)
+    init_router(monitor, detection, jsonl_path=jsonl_path)
     app.include_router(router)
-    return TestClient(app)
+    return TestClient(app), jsonl_path
 
 
 def test_list_tasks(client):
-    resp = client.get("/api/v1/tasks")
+    tc, _ = client
+    resp = tc.get("/api/v1/tasks")
     assert resp.status_code == 200
     data = resp.json()
     assert len(data) == 2
@@ -66,7 +72,8 @@ def test_list_tasks(client):
 
 
 def test_get_task_detail(client):
-    resp = client.get("/api/v1/tasks/cam-1")
+    tc, _ = client
+    resp = tc.get("/api/v1/tasks/cam-1")
     assert resp.status_code == 200
     data = resp.json()
     assert data["task"]["stream_id"] == "cam-1"
@@ -75,16 +82,104 @@ def test_get_task_detail(client):
 
 
 def test_get_task_not_found(client):
-    resp = client.get("/api/v1/tasks/nonexistent")
+    tc, _ = client
+    resp = tc.get("/api/v1/tasks/nonexistent")
     assert resp.status_code == 404
 
 
 def test_get_results_empty(client):
-    resp = client.get("/api/v1/tasks/cam-1/results")
+    tc, _ = client
+    resp = tc.get("/api/v1/tasks/cam-1/results")
     assert resp.status_code == 200
     assert resp.json() == []
 
 
 def test_get_results_not_found(client):
-    resp = client.get("/api/v1/tasks/nope/results")
+    tc, _ = client
+    resp = tc.get("/api/v1/tasks/nope/results")
     assert resp.status_code == 404
+
+
+def test_history_empty(client):
+    """History endpoint returns empty body when JSONL file doesn't exist."""
+    tc, _ = client
+    resp = tc.get("/api/v1/history")
+    assert resp.status_code == 200
+    assert resp.text == ""
+
+
+def test_history_returns_records(client):
+    """History endpoint streams records from JSONL file."""
+    tc, jsonl_path = client
+    records = [
+        {"task_id": "t1", "timestamp_ms": 1000, "stream_id": "cam-1",
+         "stream_name": "Camera 1", "detections": [], "image_url": "http://minio/1"},
+        {"task_id": "t2", "timestamp_ms": 2000, "stream_id": "cam-2",
+         "stream_name": "Camera 2", "detections": [], "image_url": "http://minio/2"},
+    ]
+    with open(jsonl_path, "w") as f:
+        for r in records:
+            f.write(json.dumps(r) + "\n")
+
+    resp = tc.get("/api/v1/history")
+    assert resp.status_code == 200
+    lines = [l for l in resp.text.splitlines() if l.strip()]
+    assert len(lines) == 2
+
+
+def test_history_filter_stream_id(client):
+    """History endpoint filters by stream_id."""
+    tc, jsonl_path = client
+    records = [
+        {"task_id": "t1", "timestamp_ms": 1000, "stream_id": "cam-1",
+         "stream_name": "Camera 1", "detections": [], "image_url": ""},
+        {"task_id": "t2", "timestamp_ms": 2000, "stream_id": "cam-2",
+         "stream_name": "Camera 2", "detections": [], "image_url": ""},
+    ]
+    with open(jsonl_path, "w") as f:
+        for r in records:
+            f.write(json.dumps(r) + "\n")
+
+    resp = tc.get("/api/v1/history?stream_id=cam-1")
+    assert resp.status_code == 200
+    lines = [l for l in resp.text.splitlines() if l.strip()]
+    assert len(lines) == 1
+    assert json.loads(lines[0])["stream_id"] == "cam-1"
+
+
+def test_history_filter_time_range(client):
+    """History endpoint filters by start_ms and end_ms."""
+    tc, jsonl_path = client
+    records = [
+        {"task_id": "t1", "timestamp_ms": 1000, "stream_id": "cam-1",
+         "stream_name": "Camera 1", "detections": [], "image_url": ""},
+        {"task_id": "t2", "timestamp_ms": 5000, "stream_id": "cam-1",
+         "stream_name": "Camera 1", "detections": [], "image_url": ""},
+        {"task_id": "t3", "timestamp_ms": 9000, "stream_id": "cam-1",
+         "stream_name": "Camera 1", "detections": [], "image_url": ""},
+    ]
+    with open(jsonl_path, "w") as f:
+        for r in records:
+            f.write(json.dumps(r) + "\n")
+
+    resp = tc.get("/api/v1/history?start_ms=2000&end_ms=8000")
+    assert resp.status_code == 200
+    lines = [l for l in resp.text.splitlines() if l.strip()]
+    assert len(lines) == 1
+    assert json.loads(lines[0])["task_id"] == "t2"
+
+
+def test_history_limit(client):
+    """History endpoint respects the limit parameter."""
+    tc, jsonl_path = client
+    with open(jsonl_path, "w") as f:
+        for i in range(10):
+            r = {"task_id": f"t{i}", "timestamp_ms": i * 1000,
+                 "stream_id": "cam-1", "stream_name": "Camera 1",
+                 "detections": [], "image_url": ""}
+            f.write(json.dumps(r) + "\n")
+
+    resp = tc.get("/api/v1/history?limit=3")
+    assert resp.status_code == 200
+    lines = [l for l in resp.text.splitlines() if l.strip()]
+    assert len(lines) == 3

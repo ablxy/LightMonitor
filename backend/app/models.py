@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import uuid
+
 from pydantic import BaseModel, Field
 
 
@@ -38,3 +40,25 @@ class TaskStatus(BaseModel):
 class TaskDetail(BaseModel):
     task: TaskStatus
     recent_results: list[FrameResult] = Field(default_factory=list)
+
+
+class Task(BaseModel):
+    """Internal task object passed through the async queue."""
+
+    task_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    stream_id: str
+    stream_name: str
+    image_data: bytes
+    timestamp_ms: int
+    target_labels: list[str] = Field(default_factory=list)
+
+
+class HistoryRecord(BaseModel):
+    """Persisted detection event, stored as a JSONL line."""
+
+    task_id: str
+    timestamp_ms: int
+    stream_id: str
+    stream_name: str
+    detections: list[DetectionResult] = Field(default_factory=list)
+    image_url: str = ""

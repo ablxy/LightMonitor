@@ -33,7 +33,19 @@ def sample_yaml(tmp_path):
             "webhook_url": "http://alerts.example.com/api",
             "auth": {"type": "bearer", "token": "tok"},
         },
-        "grpc": {"detection_host": "localhost", "detection_port": 50051},
+        "queue": {"maxsize": 50},
+        "minio": {
+            "endpoint": "minio:9000",
+            "access_key": "user",
+            "secret_key": "pass",
+            "bucket": "mybucket",
+            "secure": True,
+        },
+        "logging": {
+            "jsonl_path": "/var/log/detections.jsonl",
+            "rotate_when": "midnight",
+            "backup_count": 14,
+        },
         "server": {"host": "0.0.0.0", "port": 8000},
     }
     path = tmp_path / "config.yaml"
@@ -53,7 +65,12 @@ def test_load_config_full(sample_yaml):
     assert config.detection.auth.type == "api_key"
     assert config.alarm.enabled is True
     assert config.alarm.webhook_url == "http://alerts.example.com/api"
-    assert config.grpc.detection_port == 50051
+    assert config.queue.maxsize == 50
+    assert config.minio.endpoint == "minio:9000"
+    assert config.minio.bucket == "mybucket"
+    assert config.minio.secure is True
+    assert config.logging.jsonl_path == "/var/log/detections.jsonl"
+    assert config.logging.backup_count == 14
     assert config.server.port == 8000
 
 
@@ -73,7 +90,11 @@ def test_load_config_defaults(tmp_path):
     config = load_config(str(path))
     assert config.detection.confidence_threshold == 0.5
     assert config.alarm.enabled is False
-    assert config.grpc.detection_host == "localhost"
+    assert config.queue.maxsize == 100
+    assert config.minio.endpoint == "localhost:9000"
+    assert config.minio.bucket == "lightmonitor"
+    assert config.logging.rotate_when == "midnight"
+    assert config.logging.backup_count == 7
     assert config.server.host == "0.0.0.0"
 
 

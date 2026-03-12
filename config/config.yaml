@@ -36,9 +36,20 @@ alarm:
     type: "bearer"
     token: ""
 
-grpc:
-  detection_host: "localhost"
-  detection_port: 50051
+queue:
+  maxsize: 100              # Max frames in the internal async queue
+
+minio:
+  endpoint: "localhost:9000"
+  access_key: "minioadmin"
+  secret_key: "minioadmin"
+  bucket: "lightmonitor"
+  secure: false
+
+logging:
+  jsonl_path: "logs/detections.jsonl"  # JSONL log file path
+  rotate_when: "midnight"              # Daily log rotation
+  backup_count: 7                      # Keep last 7 rotated logs
 
 server:
   host: "0.0.0.0"
