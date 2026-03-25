@@ -16,12 +16,16 @@ from app.services.alarm import AlarmService
 from app.services.detection import DetectionService
 from app.services.monitor import MonitorService
 from app.api.v1.tasks import init_router, router as tasks_router
+from app.api.v1.algo_bind import router as algo_bind_router, init_binding_router
 
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",   
+    force=True
 )
 logger = logging.getLogger(__name__)
+logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
+logger.setLevel(logging.INFO)
 
 # Global service references
 _monitor: MonitorService | None = None
@@ -68,6 +72,7 @@ async def lifespan(app: FastAPI):
     _monitor = MonitorService(config, queue)
 
     init_router(_monitor, _detection, jsonl_path=config.logging.jsonl_path)
+    init_binding_router(_monitor)  # Initialize algo binding with monitor service
 
     # Start detection consumer and all monitor stream tasks
     await _detection.start()
@@ -98,6 +103,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(algo_bind_router)
 app.include_router(tasks_router)
 
 

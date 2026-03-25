@@ -38,12 +38,14 @@ class DetectionService:
         config: AppConfig,
         alarm_service: AlarmService,
         queue: asyncio.Queue,
+        num_workers: int = 4,
     ) -> None:
         self._config = config
         self._alarm = alarm_service
         self._queue = queue
+        self._num_workers = num_workers
         self._http = httpx.AsyncClient(timeout=30.0)
-        self._consumer_task: asyncio.Task | None = None
+        self._consumer_tasks: list[asyncio.Task] = []
 
         # Minio client (synchronous SDK, calls offloaded to thread)
         mc = config.minio
@@ -61,23 +63,26 @@ class DetectionService:
         # stream_id -> deque of FrameResult
         self.results: dict[str, collections.deque[FrameResult]] = {}
         for s in config.streams:
-            self.results[s.id] = collections.deque(maxlen=MAX_RESULTS_PER_STREAM)
+            self.results[s.bindId] = collections.deque(maxlen=MAX_RESULTS_PER_STREAM)
 
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
 
     async def start(self) -> None:
-        """Start the background queue consumer task."""
-        self._consumer_task = asyncio.create_task(self._consume_loop())
+        """Start the background queue consumer tasks."""
+        self._consumer_tasks = [
+            asyncio.create_task(self._consume_loop(), name=f"detect-worker-{i}")
+            for i in range(self._num_workers)
+        ]
+        logger.info("Started %d detection workers", len(self._consumer_tasks))
 
     async def close(self) -> None:
-        if self._consumer_task:
-            self._consumer_task.cancel()
-            try:
-                await self._consumer_task
-            except asyncio.CancelledError:
-                pass
+        if self._consumer_tasks:
+            for t in self._consumer_tasks:
+                t.cancel()
+            await asyncio.gather(*self._consumer_tasks, return_exceptions=True)
+            self._consumer_tasks.clear()
         await self._http.aclose()
 
     # ------------------------------------------------------------------
@@ -94,7 +99,7 @@ class DetectionService:
                 logger.exception(
                     "Unhandled error processing task %s for stream %s",
                     task.task_id,
-                    task.stream_id,
+                    task.bindId,
                 )
             finally:
                 self._queue.task_done()
@@ -146,7 +151,7 @@ class DetectionService:
     async def _upload_image(self, task: Task) -> str:
         """Upload image bytes to MinIO and return a presigned URL."""
         object_name = (
-            f"{task.stream_id}/{task.timestamp_ms}_{task.task_id}.jpg"
+            f"{task.bindId}/{task.timestamp_ms}_{task.task_id}.jpg"
         )
 
         def _upload():
@@ -168,7 +173,7 @@ class DetectionService:
                 logger.exception(
                     "MinIO upload failed for task %s (stream %s)",
                     task.task_id,
-                    task.stream_id,
+                    task.bindId,
                 )
                 return ""
 
@@ -214,8 +219,8 @@ class DetectionService:
 
         b64_image = base64.b64encode(task.image_data).decode()
         frame_result = FrameResult(
-            stream_id=task.stream_id,
-            stream_name=task.stream_name,
+            stream_id=task.bindId,
+            stream_name=task.cameraId,
             timestamp_ms=task.timestamp_ms,
             detections=detections,
             alarmed=alarmed,
@@ -223,11 +228,11 @@ class DetectionService:
         )
 
         # Store in-memory ring buffer
-        if task.stream_id not in self.results:
-            self.results[task.stream_id] = collections.deque(
+        if task.bindId not in self.results:
+            self.results[task.bindId] = collections.deque(
                 maxlen=MAX_RESULTS_PER_STREAM
             )
-        self.results[task.stream_id].appendleft(frame_result)
+        self.results[task.bindId].appendleft(frame_result)
 
         if alarmed:
             # Upload image to MinIO
@@ -238,8 +243,8 @@ class DetectionService:
             record = HistoryRecord(
                 task_id=task.task_id,
                 timestamp_ms=task.timestamp_ms,
-                stream_id=task.stream_id,
-                stream_name=task.stream_name,
+                stream_id=task.bindId,
+                stream_name=task.cameraId,
                 detections=detections,
                 image_url=image_url,
             )

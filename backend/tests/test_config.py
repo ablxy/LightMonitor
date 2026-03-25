@@ -56,9 +56,9 @@ def sample_yaml(tmp_path):
 def test_load_config_full(sample_yaml):
     config = load_config(sample_yaml)
     assert len(config.streams) == 1
-    assert config.streams[0].id == "test-01"
-    assert config.streams[0].name == "Test Camera"
-    assert config.streams[0].rtsp_url == "rtsp://127.0.0.1/test"
+    assert config.streams[0].bindId == "test-01"
+    assert config.streams[0].cameraId == "Test Camera"
+    assert config.streams[0].live_url == "rtsp://127.0.0.1/test"
     assert config.streams[0].frame_extraction.fps == 2
     assert config.streams[0].labels == ["person", "car"]
     assert config.detection.confidence_threshold == 0.6

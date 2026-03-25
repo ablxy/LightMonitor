@@ -18,18 +18,30 @@ from pydantic import BaseModel, Field
 # Pydantic configuration models
 # ---------------------------------------------------------------------------
 
+class ReportConfig(BaseModel):
+    # status_report_url: str = "http://1.1.1.1:8080/report/task_status?platformId=0001"
+    # result_report_url: str = "http://1.1.1.1:8080/report/task_result?platformId=0001"
+    status_report_url: str = Field(default="http://1.1.1.1:8080/report/task_status?platformId=0001", alias="statusReportUrl", description="任务状态上报URL")
+    result_report_url: str = Field(default="http://1.1.1.1:8080/report/task_result?platformId=0001", alias="resultReportUrl", description="任务结果上报URL")
+
+    class Config:
+            allow_population_by_field_name = True
+
+
 class FrameExtractionConfig(BaseModel):
     fps: float | None = None
     interval_s: float | None = None
 
 
 class StreamConfig(BaseModel):
-    id: str
-    name: str
-    rtsp_url: str
+    bindId: str
+    cameraId: str
+    live_url: str
     enabled: bool = True
     frame_extraction: FrameExtractionConfig = FrameExtractionConfig()
     labels: list[str] = Field(default_factory=list)
+    report: ReportConfig
+
 
 
 class AuthConfig(BaseModel):
@@ -72,6 +84,11 @@ class ServerConfig(BaseModel):
     port: int = 8000
 
 
+class ApiAuthConfig(BaseModel):
+    username: str = "maasadmin"
+    password: str = "Maas@dj0086"
+
+
 class AppConfig(BaseModel):
     streams: list[StreamConfig] = Field(default_factory=list)
     detection: DetectionConfig = DetectionConfig()
@@ -80,6 +97,8 @@ class AppConfig(BaseModel):
     minio: MinioConfig = MinioConfig()
     logging: LoggingConfig = LoggingConfig()
     server: ServerConfig = ServerConfig()
+    api_auth: ApiAuthConfig = ApiAuthConfig()
+    report: ReportConfig = ReportConfig()
 
 
 # ---------------------------------------------------------------------------
@@ -88,9 +107,10 @@ class AppConfig(BaseModel):
 
 _DEFAULT_CONFIG_PATH = os.environ.get(
     "LIGHTMONITOR_CONFIG",
-    str(Path(__file__).resolve().parent.parent.parent.parent / "config" / "config.yaml"),
+    str(Path(__file__).resolve().parent.parent.parent / "config" / "config.yaml"),
 )
 
+print(f"Using configuration file: {_DEFAULT_CONFIG_PATH}")
 
 def load_config(path: str | None = None) -> AppConfig:
     """Load and validate configuration from a YAML file."""

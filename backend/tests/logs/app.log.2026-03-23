@@ -1,0 +1,31 @@
+2026-03-23 17:14:51,561 [INFO] app.main: Loaded configuration with 0 stream(s)
+2026-03-23 17:14:51,591 [INFO] app.services.detection: Started 4 detection workers
+2026-03-23 17:14:51,591 [INFO] app.main: All services started
+2026-03-23 17:14:51,593 [INFO] root: Successfully bound camera 00000020061601010301000000000033 with bindId 00000020061601010301000000000099 to algorithms ['41812000001', '41812000002']
+2026-03-23 17:14:51,593 [INFO] httpx: HTTP Request: POST http://testserver/ai-video-analysis/ai/v1/api/algorithm/bind "HTTP/1.1 200 OK"
+2026-03-23 17:14:51,594 [INFO] app.main: All services stopped
+2026-03-23 17:14:51,595 [INFO] app.main: Loaded configuration with 0 stream(s)
+2026-03-23 17:14:51,614 [INFO] app.services.detection: Started 4 detection workers
+2026-03-23 17:14:51,614 [INFO] app.main: All services started
+2026-03-23 17:14:51,614 [INFO] root: Successfully bound camera 00000020061601010301000000000033 with bindId 00000020061601010301000000000099 to algorithms ['41812000001', '41812000002']
+2026-03-23 17:14:51,615 [INFO] httpx: HTTP Request: POST http://testserver/ai-video-analysis/ai/v1/api/algorithm/bind "HTTP/1.1 200 OK"
+2026-03-23 17:14:51,615 [INFO] app.main: All services stopped
+2026-03-23 17:16:20,109 [INFO] app.main: TimedRotatingFileHandler configured: logs/app.log
+2026-03-23 17:16:20,138 [INFO] app.services.detection: Started 4 detection workers
+2026-03-23 17:16:20,138 [INFO] app.main: All services started
+2026-03-23 17:16:20,140 [INFO] root: Successfully bound camera 00000020061601010301000000000033 with bindId 00000020061601010301000000000099 to algorithms ['41812000001', '41812000002']
+2026-03-23 17:16:20,140 [INFO] httpx: HTTP Request: POST http://testserver/ai-video-analysis/ai/v1/api/algorithm/bind "HTTP/1.1 200 OK"
+2026-03-23 17:16:20,140 [INFO] app.main: All services stopped
+2026-03-23 17:16:20,141 [INFO] app.main: Loaded configuration with 0 stream(s)
+2026-03-23 17:16:20,142 [INFO] app.main: TimedRotatingFileHandler configured: logs/app.log
+2026-03-23 17:16:20,142 [INFO] app.main: TimedRotatingFileHandler configured: logs/app.log
+2026-03-23 17:16:20,160 [INFO] app.services.detection: Started 4 detection workers
+2026-03-23 17:16:20,160 [INFO] app.services.detection: Started 4 detection workers
+2026-03-23 17:16:20,160 [INFO] app.main: All services started
+2026-03-23 17:16:20,160 [INFO] app.main: All services started
+2026-03-23 17:16:20,161 [INFO] root: Successfully bound camera 00000020061601010301000000000033 with bindId 00000020061601010301000000000099 to algorithms ['41812000001', '41812000002']
+2026-03-23 17:16:20,161 [INFO] root: Successfully bound camera 00000020061601010301000000000033 with bindId 00000020061601010301000000000099 to algorithms ['41812000001', '41812000002']
+2026-03-23 17:16:20,161 [INFO] httpx: HTTP Request: POST http://testserver/ai-video-analysis/ai/v1/api/algorithm/bind "HTTP/1.1 200 OK"
+2026-03-23 17:16:20,161 [INFO] httpx: HTTP Request: POST http://testserver/ai-video-analysis/ai/v1/api/algorithm/bind "HTTP/1.1 200 OK"
+2026-03-23 17:16:20,161 [INFO] app.main: All services stopped
+2026-03-23 17:16:20,161 [INFO] app.main: All services stopped

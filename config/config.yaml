@@ -1,26 +1,5 @@
 # LightMonitor - Video Stream AI Detection Platform Configuration
 
-streams:
-  - id: "stream-01"
-    name: "Front Gate Camera"
-    rtsp_url: "rtsp://192.168.1.100:554/stream1"
-    enabled: true
-    frame_extraction:
-      fps: 1                  # Extract 1 frame per second
-    labels:
-      - "person"
-      - "car"
-
-  - id: "stream-02"
-    name: "Warehouse Camera"
-    rtsp_url: "rtsp://192.168.1.101:554/stream1"
-    enabled: true
-    frame_extraction:
-      interval_s: 5           # Extract 1 frame every 5 seconds
-    labels:
-      - "fire"
-      - "smoke"
-      - "person"
 
 detection:
   model_url: "http://localhost:8501/v1/models/yolo:predict"
@@ -36,7 +15,7 @@ alarm:
     type: "bearer"
     token: ""
 
-queue:
+queue: 
   maxsize: 100              # Max frames in the internal async queue
 
 minio:
@@ -54,3 +33,12 @@ logging:
 server:
   host: "0.0.0.0"
   port: 8000
+
+
+report:
+  status_report_url: "http://1.1.1.1:8080/report/task_status?platformId=0001"
+  result_report_url: "http://1.1.1.1:8080/report/task_result?platformId=0001"
+
+
+
+

@@ -62,8 +62,8 @@ def detection_service(config, queue):
 async def test_process_task_no_model(detection_service, queue):
     """When model_url is empty, processing a task should succeed with zero detections."""
     task = Task(
-        stream_id="s1",
-        stream_name="Stream 1",
+        bindId="s1",
+        cameraId="Stream 1",
         image_data=b"\xff\xd8\xff\xe0",
         timestamp_ms=1700000000000,
         target_labels=["person"],
@@ -83,8 +83,8 @@ async def test_get_recent_results(detection_service, queue):
     """Results should be stored and retrievable."""
     for ts in [1000, 2000]:
         task = Task(
-            stream_id="s1",
-            stream_name="Stream 1",
+            bindId="s1",
+            cameraId="Stream 1",
             image_data=b"\xff",
             timestamp_ms=ts,
             target_labels=[],
@@ -102,8 +102,8 @@ async def test_get_recent_results(detection_service, queue):
 async def test_get_recent_results_limit(detection_service, queue):
     for i in range(10):
         task = Task(
-            stream_id="s1",
-            stream_name="Stream 1",
+            bindId="s1",
+            cameraId="Stream 1",
             image_data=b"\xff",
             timestamp_ms=i,
             target_labels=[],
@@ -126,7 +126,7 @@ def test_monitor_service_creates_tasks(config, queue):
     from app.services.monitor import MonitorService
     mon = MonitorService(config, queue)
     assert "s1" in mon.tasks
-    assert mon.tasks["s1"].status == "offline"
+    assert mon.tasks["s1"]._status == "offline"
 
 
 def test_stream_task_interval():
@@ -137,21 +137,21 @@ def test_stream_task_interval():
     q = asyncio.Queue(maxsize=10)
 
     s1 = StreamConfig(
-        id="x", name="X", rtsp_url="rtsp://x",
+        bindId="x", cameraId="X", live_url="rtsp://x",
         frame_extraction=FrameExtractionConfig(fps=2),
     )
     t1 = StreamTask(s1, q)
     assert t1._compute_interval() == 0.5
 
     s2 = StreamConfig(
-        id="y", name="Y", rtsp_url="rtsp://y",
+        bindId="y", cameraId="Y", live_url="rtsp://y",
         frame_extraction=FrameExtractionConfig(interval_s=10),
     )
     t2 = StreamTask(s2, q)
     assert t2._compute_interval() == 10.0
 
     # Default when nothing is set
-    s3 = StreamConfig(id="z", name="Z", rtsp_url="rtsp://z")
+    s3 = StreamConfig(bindId="z", cameraId="Z", live_url="rtsp://z")
     t3 = StreamTask(s3, q)
     assert t3._compute_interval() == 1.0
 
@@ -161,8 +161,8 @@ def test_queue_backpressure(config, queue):
     # Fill the queue to capacity
     for i in range(10):
         task = Task(
-            stream_id="s1",
-            stream_name="Stream 1",
+            bindId="s1",
+            cameraId="Stream 1",
             image_data=b"\xff",
             timestamp_ms=i,
             target_labels=[],
@@ -177,8 +177,8 @@ def test_queue_backpressure(config, queue):
 
     # Now there is space for one more
     new_task = Task(
-        stream_id="s1",
-        stream_name="Stream 1",
+        bindId="s1",
+        cameraId="Stream 1",
         image_data=b"\xff",
         timestamp_ms=9999,
         target_labels=[],
