@@ -1,5 +1,5 @@
 """Detection Service – async queue consumer that runs AI inference, uploads to
-MinIO, and persists results as JSONL."""
+RustFS (S3), and persists results as JSONL."""
 
 from __future__ import annotations
 
@@ -12,10 +12,11 @@ import logging
 import os
 import time
 from typing import TYPE_CHECKING
+import boto3
+from botocore.client import Config
+from botocore.exceptions import ClientError
 
 import httpx
-from minio import Minio
-from minio.error import S3Error
 
 from app.models import BoundingBox, DetectionResult, FrameResult, HistoryRecord, Task
 
@@ -46,15 +47,23 @@ class DetectionService:
         self._http = httpx.AsyncClient(timeout=30.0)
         self._consumer_tasks: list[asyncio.Task] = []
 
-        # Minio client (synchronous SDK, calls offloaded to thread)
-        mc = config.minio
-        self._minio = Minio(
-            mc.endpoint,
-            access_key=mc.access_key,
-            secret_key=mc.secret_key,
-            secure=mc.secure,
+        # RustFS (S3 compatible) client (initialized synchronously)
+        rc = config.rustfs
+        self._bucket = rc.bucket
+
+        # Determine endpoint URL with scheme
+        protocol = "https" if rc.secure else "http"
+        endpoint = rc.endpoint
+        if not endpoint.startswith("http"):
+            endpoint = f"{protocol}://{endpoint}"
+
+        self._s3 = boto3.client(
+            "s3",
+            endpoint_url=endpoint,
+            aws_access_key_id=rc.access_key,
+            aws_secret_access_key=rc.secret_key,
+            config=Config(signature_version="s3v4"),
         )
-        self._bucket = mc.bucket
 
         # JSONL log path
         self._jsonl_path = config.logging.jsonl_path
@@ -133,44 +142,53 @@ class DetectionService:
             return []
 
     # ------------------------------------------------------------------
-    # MinIO helpers
+    # RustFS / S3 helpers
     # ------------------------------------------------------------------
 
     async def _ensure_bucket(self) -> None:
-        """Create the MinIO bucket if it does not exist (thread-offloaded)."""
+        """Create the RustFS bucket if it does not exist (thread-offloaded)."""
         def _create():
             try:
-                if not self._minio.bucket_exists(self._bucket):
-                    self._minio.make_bucket(self._bucket)
-            except S3Error:
-                logger.exception("Failed to ensure MinIO bucket %s", self._bucket)
+                # Try to head bucket first to check existence and permissions
+                self._s3.head_bucket(Bucket=self._bucket)
+            except ClientError as e:
+                # If 404 Not Found, create it
+                error_code = e.response.get("Error", {}).get("Code")
+                if error_code == "404":
+                    try:
+                        self._s3.create_bucket(Bucket=self._bucket)
+                        logger.info("Created RustFS bucket: %s", self._bucket)
+                    except ClientError:
+                        logger.exception("Failed to create RustFS bucket %s", self._bucket)
+                else:
+                    # Other errors (403 Forbidden etc)
+                    logger.warning("Issue checking RustFS bucket %s: %s", self._bucket, e)
 
         await asyncio.to_thread(_create)
 
     async def _upload_image(self, task: Task) -> str:
-        """Upload image bytes to MinIO and return a presigned URL."""
+        """Upload image bytes to RustFS and return a presigned URL."""
         object_name = (
             f"{task.bindId}/{task.timestamp_ms}_{task.task_id}.jpg"
         )
 
         def _upload():
             try:
-                self._minio.put_object(
-                    self._bucket,
-                    object_name,
-                    io.BytesIO(task.image_data),
-                    length=len(task.image_data),
-                    content_type="image/jpeg",
+                self._s3.put_object(
+                    Bucket=self._bucket,
+                    Key=object_name,
+                    Body=task.image_data,
+                    ContentType="image/jpeg",
                 )
                 # Return a presigned URL valid for 7 days
-                return self._minio.presigned_get_object(
-                    self._bucket,
-                    object_name,
-                    expires=datetime.timedelta(days=7),
+                return self._s3.generate_presigned_url(
+                    ClientMethod="get_object",
+                    Params={"Bucket": self._bucket, "Key": object_name},
+                    ExpiresIn=int(datetime.timedelta(days=7).total_seconds()),
                 )
-            except S3Error:
+            except ClientError:
                 logger.exception(
-                    "MinIO upload failed for task %s (stream %s)",
+                    "RustFS upload failed for task %s (stream %s)",
                     task.task_id,
                     task.bindId,
                 )
@@ -198,7 +216,7 @@ class DetectionService:
     # ------------------------------------------------------------------
 
     async def _process_task(self, task: Task) -> None:
-        """Run inference; on a hit, upload to MinIO and persist JSONL."""
+        """Run inference; on a hit, upload to RustFS and persist JSONL."""
         time_now = int(time.time() * 1000)
         raw_dets = await self._call_model(task.image_data)
         duration_time = int(time.time() * 1000) - time_now
@@ -237,7 +255,7 @@ class DetectionService:
         self.results[task.bindId].appendleft(frame_result)
 
         if alarmed:
-            # Upload image to MinIO
+            # Upload image to RustFS
             await self._ensure_bucket()
             image_url = await self._upload_image(task)
 
@@ -252,9 +270,9 @@ class DetectionService:
             )
             await self._write_jsonl(record)
 
-            # Trigger alarm with MinIO URL
+            # Trigger alarm with RustFS URL
             asyncio.create_task(
-                self._alarm.push(frame_result, image_url=image_url,report_url=task.result_report_url)
+                self._alarm.push(frame_result, image_url=image_url, report_url=task.result_report_url)
             )
 
     # ------------------------------------------------------------------

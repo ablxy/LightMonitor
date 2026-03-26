@@ -65,10 +65,10 @@ class QueueConfig(BaseModel):
     maxsize: int = 100
 
 
-class MinioConfig(BaseModel):
+class RustFSConfig(BaseModel):
     endpoint: str = "localhost:9000"
-    access_key: str = "minioadmin"
-    secret_key: str = "minioadmin"
+    access_key: str = "rustfsadmin"
+    secret_key: str = "rustfssecret"
     bucket: str = "lightmonitor"
     secure: bool = False
 
@@ -94,7 +94,7 @@ class AppConfig(BaseModel):
     detection: DetectionConfig = DetectionConfig()
     alarm: AlarmConfig = AlarmConfig()
     queue: QueueConfig = QueueConfig()
-    minio: MinioConfig = MinioConfig()
+    rustfs: RustFSConfig = RustFSConfig()
     logging: LoggingConfig = LoggingConfig()
     server: ServerConfig = ServerConfig()
     api_auth: ApiAuthConfig = ApiAuthConfig()
