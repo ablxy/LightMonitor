@@ -8,7 +8,6 @@ import base64
 import collections
 import datetime
 import io
-import json
 import logging
 import os
 import time
@@ -200,7 +199,10 @@ class DetectionService:
 
     async def _process_task(self, task: Task) -> None:
         """Run inference; on a hit, upload to MinIO and persist JSONL."""
+        time_now = int(time.time() * 1000)
         raw_dets = await self._call_model(task.image_data)
+        duration_time = int(time.time() * 1000) - time_now
+        logger.info("Model inference time for task %s: %d ms", task.task_id, duration_time)
 
         threshold = self._config.detection.confidence_threshold
         detections: list[DetectionResult] = []
@@ -252,7 +254,7 @@ class DetectionService:
 
             # Trigger alarm with MinIO URL
             asyncio.create_task(
-                self._alarm.push(frame_result, image_url=image_url)
+                self._alarm.push(frame_result, image_url=image_url,report_url=task.result_report_url)
             )
 
     # ------------------------------------------------------------------

@@ -146,6 +146,7 @@ class StreamTask:
 
         while self._status == MonitorStatus.RUNNING:
             cap = cv2.VideoCapture(rtsp_url)
+
             if not cap.isOpened():
                 self._status = MonitorStatus.ERROR
                 logger.warning(
@@ -173,7 +174,16 @@ class StreamTask:
                     if not ok:
                         continue
                     image_bytes = buf.tobytes()
-                    ts_ms = int(time.time() * 1000)
+                    
+                    # 获取视频流内部时间戳（单位：毫秒）
+                    stream_ts = cap.get(cv2.CAP_PROP_POS_MSEC)
+                    
+                    # 如果视频流没提供时间戳（返回0或负数），则降级使用系统时间
+                    if stream_ts > 0:
+                        ts_ms = int(stream_ts)
+                    else:
+                        ts_ms = int(time.time() * 1000)
+                        
                     self.latest_frame_ts = ts_ms
 
                     task = Task(

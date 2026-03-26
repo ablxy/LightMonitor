@@ -4,13 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import time
+
 from datetime import datetime
 from typing import TYPE_CHECKING
 
 import httpx
 
-from app.api.v1.algo_auth import generate_md5_signature
 
 if TYPE_CHECKING:
     from app.config import AlarmConfig
@@ -45,17 +44,9 @@ class AlarmService:
         # Determine the target URL: prefer the dynamic report_url from the task,
         # otherwise fall back to the global webhook_url from config.
         target_url = report_url or self._config.webhook_url
-        if not self._config.enabled or not target_url:
+        if  not target_url:
             return False
 
-        request_path = "/api/sapa/report/data"
-        full_url = f"http://testserver{request_path}"
-        
-        client_sign = generate_md5_signature(full_url)
-
-        headers = {
-            "X-Sign": client_sign  
-        }
 
         # Format timestamp: yyyy-MM-dd HH:mm:ss
         capture_time = datetime.fromtimestamp(result.timestamp_ms / 1000.0).strftime(
@@ -63,17 +54,19 @@ class AlarmService:
         )
 
         # Group detections by algorithm type (using label as the type identifier)
-        # Assuming detections.label contains the algorithmType code (e.g. "41811000007")
-        # or that we report each label type separately.
         unique_algos = {d.label for d in result.detections}
 
         success = True
 
         for algo_type in unique_algos:
-            # Filter results for this algorithm type
+            # Filter results for this algorithm type for the 'results' array
             algo_results = []
+            # Gather positions for the 'snap.data' attributes (format: [x1, y1, x2, y2, conf, label])
+            snap_positions = []
+
             for d in result.detections:
                 if d.label == algo_type and d.bbox:
+                    # 1. 填充 results 数组 (x, y, w, h)
                     algo_results.append({
                         "confidence": d.confidence,
                         "x": int(d.bbox.x_min),
@@ -81,31 +74,60 @@ class AlarmService:
                         "width": int(d.bbox.x_max - d.bbox.x_min),
                         "height": int(d.bbox.y_max - d.bbox.y_min),
                     })
+                    
+                    # 2. 填充 snap.data.attributes.result.positions (x1, y1, x2, y2, conf, label)
+                    # 示例格式: [393, 412, 740, 1034, "0.7959", "person"]
+                    snap_positions.append([
+                        int(d.bbox.x_min),
+                        int(d.bbox.y_min),
+                        int(d.bbox.x_max),
+                        int(d.bbox.y_max),
+                        f"{d.confidence:.4f}",
+                        d.label
+                    ])
 
             if not algo_results:
                 continue
 
-            # Construct the payload according to 3.2.5 spec
+            # Construct snap.data structure to match the example
+            snap_data_payload = {
+                "attributes": {
+                    "result": {
+                        "num": len(snap_positions),
+                        "alarm": True,
+                        "positions": snap_positions
+                    }
+                },
+                "code": 0,
+                "success": True,
+                "message": "success",
+                "timestamp": capture_time,
+                # taskID 和 timecost 如果没有对应数据，可以模拟或留空
+                "taskID": f"task-{result.timestamp_ms}", 
+                "timecost": "0ms" 
+            }
+
+            # Construct the final payload
             payload = {
                 "algorithmType": algo_type,
                 "bindId": result.stream_id,
                 "cameraId": result.stream_name,
                 "results": algo_results,
                 "snap": {
-                    "data": {},  # Custom display, content omitted as requested
+                    "data": snap_data_payload,
                     "captureBase64": result.image_base64 or "",
                     "captureTime": capture_time,
                 },
             }
 
             # Send the request
-            if not await self._send_payload(target_url, payload, headers, result.stream_id):
+            if not await self._send_payload(target_url, payload, result.stream_id):
                 success = False
 
         return success
 
     async def _send_payload(
-        self, url: str, payload: dict, headers: dict, stream_id: str
+        self, url: str, payload: dict, stream_id: str
     ) -> bool:
         """Helper to send a single payload with retries."""
         delay = _RETRY_BASE_DELAY
@@ -114,10 +136,23 @@ class AlarmService:
                 resp = await self._client.post(
                     url,
                     json=payload,
-                    headers=headers,
                 )
+                # 记录详细的响应内容有助于调试
+                if resp.status_code != 200:
+                    logger.warning("Alarm server responded with status %s: %s", resp.status_code, resp.text)
+                
                 resp.raise_for_status()
-                logger.info("Alarm pushed to %s for stream %s", url, stream_id)
+                
+                # 可选：检查返回体中的 resultCode
+                try:
+                    resp_data = resp.json()
+                    if resp_data.get("resultCode") == 0:
+                        logger.info("Alarm pushed successfully to %s for stream %s", url, stream_id)
+                    else:
+                        logger.warning("Alarm pushed but server returned error: %s", resp_data)
+                except Exception:
+                    logger.info("Alarm pushed to %s for stream %s (response not JSON)", url, stream_id)
+
                 return True
             except httpx.HTTPError as exc:
                 logger.warning(
@@ -125,7 +160,7 @@ class AlarmService:
                     attempt,
                     _MAX_RETRIES,
                     stream_id,
-                    exc,
+                    str(exc),
                     f"; retrying in {delay:.1f}s…" if attempt < _MAX_RETRIES else "",
                 )
                 if attempt < _MAX_RETRIES:
