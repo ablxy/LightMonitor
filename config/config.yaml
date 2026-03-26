@@ -18,10 +18,10 @@ alarm:
 queue: 
   maxsize: 100              # Max frames in the internal async queue
 
-minio:
+rustfs:
   endpoint: "localhost:9000"
-  access_key: "minioadmin"
-  secret_key: "minioadmin"
+  access_key: "rustfsadmin"
+  secret_key: "rustfsadmin"
   bucket: "lightmonitor"
   secure: false
 
