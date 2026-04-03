@@ -61,11 +61,12 @@ class StreamTask:
             return
         self._status = MonitorStatus.STARTING
 
-        # 获取实时视频流URL（如果API调用失败则抛出异常，外层会捕获并设置状态为error）
         try:
             rtsp_url = await self.get_video_streaming()
             logging.info("Starting stream task %s with RTSP URL: %s", self.stream_id, rtsp_url)
-
+            
+            self._status = MonitorStatus.RUNNING
+            
             self._task = asyncio.create_task(self._run_loop(rtsp_url))
 
             await self.upload_status()

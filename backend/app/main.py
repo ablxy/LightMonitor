@@ -21,7 +21,7 @@ from app.api.v1.algo_bind import router as algo_bind_router, init_binding_router
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",   
-    force=True
+    force=True,
 )
 logger = logging.getLogger(__name__)
 logging.getLogger("uvicorn.access").setLevel(logging.WARNING)

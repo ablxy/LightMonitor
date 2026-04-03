@@ -33,12 +33,3 @@ logging:
 server:
   host: "0.0.0.0"
   port: 8000
-
-
-report:
-  status_report_url: "http://1.1.1.1:8080/report/task_status?platformId=0001"
-  result_report_url: "http://1.1.1.1:8080/report/task_result?platformId=0001"
-
-
-
-

@@ -1,0 +1,5 @@
+# mediamtx.yml 最简配置
+paths:
+  all:
+    # 允许所有路径推流和拉流
+    source: publisher

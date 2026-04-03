@@ -6,7 +6,9 @@ from app.services.monitor import MonitorService
 from app.config import  StreamConfig,ReportConfig
 from app.api.v1.algo_auth import verify_md5_signature
 import logging
-# logger = logging.getLogger(__name__)
+
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/ai-video-analysis/ai/v1/api/algorithm", tags=["Algorithm Binding and UnBinding"])
 

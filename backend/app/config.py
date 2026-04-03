@@ -21,8 +21,8 @@ from pydantic import BaseModel, Field
 class ReportConfig(BaseModel):
     # status_report_url: str = "http://1.1.1.1:8080/report/task_status?platformId=0001"
     # result_report_url: str = "http://1.1.1.1:8080/report/task_result?platformId=0001"
-    status_report_url: str = Field(default="http://1.1.1.1:8080/report/task_status?platformId=0001", alias="statusReportUrl", description="任务状态上报URL")
-    result_report_url: str = Field(default="http://1.1.1.1:8080/report/task_result?platformId=0001", alias="resultReportUrl", description="任务结果上报URL")
+    status_report_url: str|None = Field(default=None,alias="statusReportUrl", description="任务状态上报URL")
+    result_report_url: str|None = Field(default=None,alias="resultReportUrl", description="任务结果上报URL")
 
     class Config:
             allow_population_by_field_name = True
@@ -79,10 +79,6 @@ class LoggingConfig(BaseModel):
     backup_count: int = 7
 
 
-class ServerConfig(BaseModel):
-    host: str = "0.0.0.0"
-    port: int = 8000
-
 
 class ApiAuthConfig(BaseModel):
     username: str = "maasadmin"
@@ -96,7 +92,6 @@ class AppConfig(BaseModel):
     queue: QueueConfig = QueueConfig()
     rustfs: RustFSConfig = RustFSConfig()
     logging: LoggingConfig = LoggingConfig()
-    server: ServerConfig = ServerConfig()
     api_auth: ApiAuthConfig = ApiAuthConfig()
     report: ReportConfig = ReportConfig()
 
