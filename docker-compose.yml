@@ -10,16 +10,22 @@ services:
       - "50051:50051"
     volumes:
       - ./config:/config:ro
+      - backend_data:/app/data      # SQLite 数据库及快照持久化
+      - backend_logs:/app/logs      # 检测日志持久化
     environment:
       - LIGHTMONITOR_CONFIG=/config/config.yaml
     restart: unless-stopped
 
-  frontend:
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile
-    ports:
-      - "3000:80"
-    depends_on:
-      - backend
-    restart: unless-stopped
+  # frontend:                       # 待前端代码就绪后取消注释
+  #   build:
+  #     context: ./frontend
+  #     dockerfile: Dockerfile
+  #   ports:
+  #     - "3000:80"
+  #   depends_on:
+  #     - backend
+  #   restart: unless-stopped
+
+volumes:
+  backend_data:
+  backend_logs:
