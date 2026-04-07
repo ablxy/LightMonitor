@@ -2,12 +2,10 @@
 
 from __future__ import annotations
 
-import json
 import os
-from typing import Generator
 
 from fastapi import APIRouter, HTTPException, Query
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse
 
 from app.models import FrameResult, HistoryRecord, TaskDetail, TaskStatus
 
@@ -16,14 +14,16 @@ router = APIRouter(prefix="/api/v1", tags=["tasks"])
 # These will be set by main.py at startup
 _monitor_service = None
 _detection_service = None
-_jsonl_path: str = "logs/detections.jsonl"
+_db_service = None
+_snapshots_dir: str = "data/snapshots"
 
 
-def init_router(monitor_service, detection_service, jsonl_path: str = "logs/detections.jsonl") -> None:  # noqa: ANN001
-    global _monitor_service, _detection_service, _jsonl_path
+def init_router(monitor_service, detection_service, db_service, snapshots_dir: str = "data/snapshots") -> None:  # noqa: ANN001
+    global _monitor_service, _detection_service, _db_service, _snapshots_dir
     _monitor_service = monitor_service
     _detection_service = detection_service
-    _jsonl_path = jsonl_path
+    _db_service = db_service
+    _snapshots_dir = snapshots_dir
 
 
 # ------------------------------------------------------------------
@@ -98,44 +98,6 @@ async def get_results(
 # GET /api/v1/history
 # ------------------------------------------------------------------
 
-def _iter_jsonl(
-    path: str,
-    stream_id: str | None,
-    start_ms: int | None,
-    end_ms: int | None,
-    limit: int,
-) -> Generator[str, None, None]:
-    """Generator that reads the JSONL file line-by-line and filters records."""
-    if not os.path.exists(path):
-        return
-
-    count = 0
-    with open(path, "r", encoding="utf-8") as fh:
-        for line in fh:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                record = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-
-            # Filter by stream_id
-            if stream_id is not None and record.get("stream_id") != stream_id:
-                continue
-            # Filter by time range
-            ts = record.get("timestamp_ms", 0)
-            if start_ms is not None and ts < start_ms:
-                continue
-            if end_ms is not None and ts > end_ms:
-                continue
-
-            yield json.dumps(record) + "\n"
-            count += 1
-            if count >= limit:
-                break
-
-
 @router.get("/history")
 async def get_history(
     stream_id: str | None = Query(None, description="Filter by stream ID"),
@@ -143,16 +105,36 @@ async def get_history(
     end_ms: int | None = Query(None, description="End timestamp (ms, inclusive)"),
     limit: int = Query(100, ge=1, le=1000, description="Maximum records to return"),
 ):
-    """Stream JSONL history records filtered by stream ID and/or time range.
+    """Return history records from SQLite, filtered by stream ID and/or time range."""
+    if _db_service is None:
+        raise HTTPException(status_code=503, detail="Service not ready")
 
-    The response is a JSON Lines stream (``Content-Type: application/x-ndjson``).
-    Each line is a JSON-serialised :class:`HistoryRecord`.
-    """
-
-    def _generate():
-        yield from _iter_jsonl(_jsonl_path, stream_id, start_ms, end_ms, limit)
-
-    return StreamingResponse(
-        _generate(),
-        media_type="application/x-ndjson",
+    records = await _db_service.query_records(
+        stream_id=stream_id,
+        start_ms=start_ms,
+        end_ms=end_ms,
+        limit=limit,
     )
+    return records
+
+
+# ------------------------------------------------------------------
+# GET /api/v1/snapshots/{stream_id}/{filename}
+# ------------------------------------------------------------------
+
+@router.get("/snapshots/{stream_id}/{filename}")
+async def get_snapshot(stream_id: str, filename: str):
+    """Serve a stored snapshot image from the local filesystem."""
+    # Prevent path traversal
+    if ".." in stream_id or ".." in filename or "/" in filename:
+        raise HTTPException(status_code=400, detail="Invalid path")
+
+    if _snapshots_dir is None:
+        raise HTTPException(status_code=503, detail="Service not ready")
+
+    filepath = os.path.join(_snapshots_dir, stream_id, filename)
+    if not os.path.isfile(filepath):
+        raise HTTPException(status_code=404, detail="Snapshot not found")
+
+    return FileResponse(filepath, media_type="image/jpeg")
+

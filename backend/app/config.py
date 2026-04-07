@@ -55,22 +55,15 @@ class DetectionConfig(BaseModel):
     confidence_threshold: float = 0.5
 
 
-class AlarmConfig(BaseModel):
-    enabled: bool = False
-    webhook_url: str = ""
-    auth: AuthConfig = AuthConfig()
 
 
 class QueueConfig(BaseModel):
     maxsize: int = 100
 
 
-class RustFSConfig(BaseModel):
-    endpoint: str = "localhost:9000"
-    access_key: str = "rustfsadmin"
-    secret_key: str = "rustfssecret"
-    bucket: str = "lightmonitor"
-    secure: bool = False
+class StorageConfig(BaseModel):
+    db_path: str = "data/lightmonitor.db"
+    snapshots_dir: str = "data/snapshots"
 
 
 class LoggingConfig(BaseModel):
@@ -88,9 +81,8 @@ class ApiAuthConfig(BaseModel):
 class AppConfig(BaseModel):
     streams: list[StreamConfig] = Field(default_factory=list)
     detection: DetectionConfig = DetectionConfig()
-    alarm: AlarmConfig = AlarmConfig()
     queue: QueueConfig = QueueConfig()
-    rustfs: RustFSConfig = RustFSConfig()
+    storage: StorageConfig = StorageConfig()
     logging: LoggingConfig = LoggingConfig()
     api_auth: ApiAuthConfig = ApiAuthConfig()
     report: ReportConfig = ReportConfig()

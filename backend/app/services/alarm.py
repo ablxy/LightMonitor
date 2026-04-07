@@ -24,8 +24,7 @@ _RETRY_BASE_DELAY = 1.0  # seconds; doubles on each retry
 class AlarmService:
     """HTTP client that POSTs alarm payloads to an external system."""
 
-    def __init__(self, config: AlarmConfig) -> None:
-        self._config = config
+    def __init__(self) -> None:
         self._client = httpx.AsyncClient(timeout=10.0)
 
     # ------------------------------------------------------------------
@@ -41,9 +40,11 @@ class AlarmService:
         Retries up to ``_MAX_RETRIES`` times with exponential back-off.
         Returns True on success, False otherwise.
         """
+
+
         # Determine the target URL: prefer the dynamic report_url from the task,
         # otherwise fall back to the global webhook_url from config.
-        target_url = report_url or self._config.webhook_url
+        target_url = report_url 
         if  not target_url:
             return False
 

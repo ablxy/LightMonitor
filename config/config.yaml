@@ -8,22 +8,13 @@ detection:
     token: ""
   confidence_threshold: 0.5
 
-alarm:
-  enabled: true
-  webhook_url: "http://external-alarm-system/api/v1/alerts"
-  auth:
-    type: "bearer"
-    token: ""
 
 queue: 
   maxsize: 100              # Max frames in the internal async queue
 
-rustfs:
-  endpoint: "localhost:9000"
-  access_key: "rustfsadmin"
-  secret_key: "rustfsadmin"
-  bucket: "lightmonitor"
-  secure: false
+storage:
+  db_path: "data/lightmonitor.db"
+  snapshots_dir: "data/snapshots"
 
 logging:
   jsonl_path: "logs/detections.jsonl"  # JSONL log file path

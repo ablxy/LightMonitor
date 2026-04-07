@@ -13,6 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_config
 from app.services.alarm import AlarmService
+from app.services.database import DatabaseService
 from app.services.detection import DetectionService
 from app.services.monitor import MonitorService
 from app.api.v1.tasks import init_router, router as tasks_router
@@ -31,6 +32,7 @@ logger.setLevel(logging.INFO)
 _monitor: MonitorService | None = None
 _detection: DetectionService | None = None
 _alarm: AlarmService | None = None
+_database: DatabaseService | None = None
 
 
 def _configure_timed_rotating_handler(config) -> None:
@@ -57,7 +59,7 @@ def _configure_timed_rotating_handler(config) -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _monitor, _detection, _alarm
+    global _monitor, _detection, _alarm, _database
 
     config = get_config()
     logger.info("Loaded configuration with %d stream(s)", len(config.streams))
@@ -67,11 +69,19 @@ async def lifespan(app: FastAPI):
     # Create the shared async queue with backpressure limit
     queue: asyncio.Queue = asyncio.Queue(maxsize=config.queue.maxsize)
 
-    _alarm = AlarmService(config.alarm)
-    _detection = DetectionService(config, _alarm, queue)
+    _alarm = AlarmService()
+    _database = DatabaseService(config.storage.db_path)
+    await _database.start()
+
+    _detection = DetectionService(config, _alarm, queue, _database)
     _monitor = MonitorService(config, queue)
 
-    init_router(_monitor, _detection, jsonl_path=config.logging.jsonl_path)
+    init_router(
+        _monitor,
+        _detection,
+        db_service=_database,
+        snapshots_dir=config.storage.snapshots_dir,
+    )
     init_binding_router(_monitor)  # Initialize algo binding with monitor service
 
     # Start detection consumer and all monitor stream tasks
@@ -84,6 +94,7 @@ async def lifespan(app: FastAPI):
     # Shutdown
     await _monitor.stop_all()
     await _detection.close()
+    await _database.close()
     await _alarm.close()
     logger.info("All services stopped")
 

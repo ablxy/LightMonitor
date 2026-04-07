@@ -1,20 +1,15 @@
-"""Detection Service – async queue consumer that runs AI inference, uploads to
-RustFS (S3), and persists results as JSONL."""
+"""Detection Service – async queue consumer that runs AI inference, stores
+snapshots on the local filesystem, and persists results to SQLite."""
 
 from __future__ import annotations
 
 import asyncio
 import base64
 import collections
-import datetime
-import io
 import logging
 import os
 import time
 from typing import TYPE_CHECKING
-import boto3
-from botocore.client import Config
-from botocore.exceptions import ClientError
 
 import httpx
 
@@ -23,6 +18,7 @@ from app.models import BoundingBox, DetectionResult, FrameResult, HistoryRecord,
 if TYPE_CHECKING:
     from app.config import AppConfig
     from app.services.alarm import AlarmService
+    from app.services.database import DatabaseService
 
 logger = logging.getLogger(__name__)
 
@@ -38,35 +34,19 @@ class DetectionService:
         config: AppConfig,
         alarm_service: AlarmService,
         queue: asyncio.Queue,
+        db_service: DatabaseService,
         num_workers: int = 4,
     ) -> None:
         self._config = config
         self._alarm = alarm_service
         self._queue = queue
+        self._db = db_service
         self._num_workers = num_workers
         self._http = httpx.AsyncClient(timeout=30.0)
         self._consumer_tasks: list[asyncio.Task] = []
 
-        # RustFS (S3 compatible) client (initialized synchronously)
-        rc = config.rustfs
-        self._bucket = rc.bucket
-
-        # Determine endpoint URL with scheme
-        protocol = "https" if rc.secure else "http"
-        endpoint = rc.endpoint
-        if not endpoint.startswith("http"):
-            endpoint = f"{protocol}://{endpoint}"
-
-        self._s3 = boto3.client(
-            "s3",
-            endpoint_url=endpoint,
-            aws_access_key_id=rc.access_key,
-            aws_secret_access_key=rc.secret_key,
-            config=Config(signature_version="s3v4"),
-        )
-
-        # JSONL log path
-        self._jsonl_path = config.logging.jsonl_path
+        # Local snapshot storage directory
+        self._snapshots_dir = config.storage.snapshots_dir
 
         # stream_id -> deque of FrameResult
         self.results: dict[str, collections.deque[FrameResult]] = {}
@@ -142,74 +122,30 @@ class DetectionService:
             return []
 
     # ------------------------------------------------------------------
-    # RustFS / S3 helpers
+    # Snapshot storage (local filesystem)
     # ------------------------------------------------------------------
 
-    async def _ensure_bucket(self) -> None:
-        """Create the RustFS bucket if it does not exist (thread-offloaded)."""
-        def _create():
-            try:
-                # Try to head bucket first to check existence and permissions
-                self._s3.head_bucket(Bucket=self._bucket)
-            except ClientError as e:
-                # If 404 Not Found, create it
-                error_code = e.response.get("Error", {}).get("Code")
-                if error_code == "404":
-                    try:
-                        self._s3.create_bucket(Bucket=self._bucket)
-                        logger.info("Created RustFS bucket: %s", self._bucket)
-                    except ClientError:
-                        logger.exception("Failed to create RustFS bucket %s", self._bucket)
-                else:
-                    # Other errors (403 Forbidden etc)
-                    logger.warning("Issue checking RustFS bucket %s: %s", self._bucket, e)
+    async def _save_snapshot(self, task: Task) -> str:
+        """Save the frame image to disk and return an API-accessible URL path."""
+        filename = f"{task.timestamp_ms}_{task.task_id}.jpg"
+        stream_dir = os.path.join(self._snapshots_dir, task.bindId)
 
-        await asyncio.to_thread(_create)
+        def _write() -> str:
+            os.makedirs(stream_dir, exist_ok=True)
+            filepath = os.path.join(stream_dir, filename)
+            with open(filepath, "wb") as fh:
+                fh.write(task.image_data)
+            return f"/api/v1/snapshots/{task.bindId}/{filename}"
 
-    async def _upload_image(self, task: Task) -> str:
-        """Upload image bytes to RustFS and return a presigned URL."""
-        object_name = (
-            f"{task.bindId}/{task.timestamp_ms}_{task.task_id}.jpg"
-        )
-
-        def _upload():
-            try:
-                self._s3.put_object(
-                    Bucket=self._bucket,
-                    Key=object_name,
-                    Body=task.image_data,
-                    ContentType="image/jpeg",
-                )
-                # Return a presigned URL valid for 7 days
-                return self._s3.generate_presigned_url(
-                    ClientMethod="get_object",
-                    Params={"Bucket": self._bucket, "Key": object_name},
-                    ExpiresIn=int(datetime.timedelta(days=7).total_seconds()),
-                )
-            except ClientError:
-                logger.exception(
-                    "RustFS upload failed for task %s (stream %s)",
-                    task.task_id,
-                    task.bindId,
-                )
-                return ""
-
-        return await asyncio.to_thread(_upload)
+        return await asyncio.to_thread(_write)
 
     # ------------------------------------------------------------------
-    # JSONL persistence
+    # SQLite persistence
     # ------------------------------------------------------------------
 
-    async def _write_jsonl(self, record: HistoryRecord) -> None:
-        """Append a HistoryRecord as a JSONL line (thread-offloaded)."""
-        line = record.model_dump_json() + "\n"
-
-        def _append():
-            os.makedirs(os.path.dirname(self._jsonl_path) or ".", exist_ok=True)
-            with open(self._jsonl_path, "a", encoding="utf-8") as fh:
-                fh.write(line)
-
-        await asyncio.to_thread(_append)
+    async def _write_record(self, record: HistoryRecord) -> None:
+        """Persist a HistoryRecord to the SQLite database."""
+        await self._db.write_record(record)
 
     # ------------------------------------------------------------------
     # Frame processing pipeline
@@ -255,11 +191,10 @@ class DetectionService:
         self.results[task.bindId].appendleft(frame_result)
 
         if alarmed:
-            # Upload image to RustFS
-            await self._ensure_bucket()
-            image_url = await self._upload_image(task)
+            # Save snapshot to local filesystem
+            image_url = await self._save_snapshot(task)
 
-            # Persist JSONL record
+            # Persist to SQLite
             record = HistoryRecord(
                 task_id=task.task_id,
                 timestamp_ms=task.timestamp_ms,
@@ -268,11 +203,11 @@ class DetectionService:
                 detections=detections,
                 image_url=image_url,
             )
-            await self._write_jsonl(record)
+            await self._write_record(record)
 
             # Trigger alarm with RustFS URL
             asyncio.create_task(
-                self._alarm.push(frame_result, image_url=image_url, report_url=task.result_report_url)
+                self._alarm.push(frame_result, image_url=image_url, report_url=task.result_report_url or "")
             )
 
     # ------------------------------------------------------------------

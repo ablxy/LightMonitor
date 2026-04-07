@@ -244,6 +244,7 @@ class MonitorService:
     async def init_single_stream(self,stream_cfg: StreamConfig) -> None:
         if stream_cfg.enabled:
             self.tasks[stream_cfg.bindId] = StreamTask(stream_cfg, self._queue)
+            await self.tasks[stream_cfg.bindId].start()
 
     async def remove_single_stream(self, bind_id: str) -> bool:
         """停止并移除指定 bindId 的流任务，返回是否找到该任务。"""
