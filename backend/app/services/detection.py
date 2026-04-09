@@ -6,8 +6,10 @@ from __future__ import annotations
 import asyncio
 import base64
 import collections
+import json
 import logging
 import os
+import re
 import time
 from typing import TYPE_CHECKING
 
@@ -93,33 +95,109 @@ class DetectionService:
                 self._queue.task_done()
 
     # ------------------------------------------------------------------
+    # Auth / header helpers
+    # ------------------------------------------------------------------
+
+    def _build_auth_headers(self) -> dict[str, str]:
+        """Return HTTP headers with auth injected (case-insensitive type match)."""
+        headers: dict[str, str] = {"Content-Type": "application/json"}
+        auth = self._config.detection.auth
+        auth_type = auth.type.lower()
+        if auth_type == "bearer" and auth.token:
+            headers["Authorization"] = f"Bearer {auth.token}"
+        elif auth_type in ("api_key", "accesskeyid") and auth.token:
+            headers["X-API-Key"] = auth.token
+        return headers
+
+    # ------------------------------------------------------------------
     # AI model invocation
     # ------------------------------------------------------------------
 
     async def _call_model(self, image_bytes: bytes) -> list[dict]:
-        """Call the external AI model API and return raw detection dicts."""
+        """Dispatch to the appropriate model backend."""
         cfg = self._config.detection
         if not cfg.model_url:
             return []
+        if cfg.model_type.lower() == "vlm":
+            return await self._call_vlm_model(image_bytes)
+        return await self._call_yolo_model(image_bytes)
 
-        headers: dict[str, str] = {"Content-Type": "application/json"}
-        if cfg.auth.type == "bearer" and cfg.auth.token:
-            headers["Authorization"] = f"Bearer {cfg.auth.token}"
-        elif cfg.auth.type == "api_key" and cfg.auth.token:
-            headers["X-API-Key"] = cfg.auth.token
+    async def _call_yolo_model(self, image_bytes: bytes) -> list[dict]:
+        """Call a traditional object-detection model (YOLO-style) API.
 
+        Expects response: {"detections": [{label, confidence, bbox: {x_min,y_min,x_max,y_max}}]}
+        """
+        cfg = self._config.detection
+        headers = self._build_auth_headers()
         b64 = base64.b64encode(image_bytes).decode()
         payload = {"image": b64}
+        try:
+            resp = await self._http.post(cfg.model_url, json=payload, headers=headers)
+            resp.raise_for_status()
+            data = resp.json()
+            return data.get("detections", [])
+        except httpx.HTTPError:
+            logger.exception("YOLO model call failed")
+            return []
+
+    async def _call_vlm_model(self, image_bytes: bytes) -> list[dict]:
+        """Call a VLM via OpenAI-compatible chat/completions API.
+
+        Sends the frame as a base64 data-URL inside a multimodal message.
+        Parses the model's text reply as JSON detections.
+        """
+        cfg = self._config.detection
+        vlm = cfg.vlm
+        headers = self._build_auth_headers()
+
+        b64 = base64.b64encode(image_bytes).decode()
+        messages: list[dict] = []
+        if vlm.system_prompt:
+            messages.append({"role": "system", "content": vlm.system_prompt})
+        messages.append({
+            "role": "user",
+            "content": [
+                {"type": "text", "text": vlm.prompt},
+                {
+                    "type": "image_url",
+                    "image_url": {"url": f"data:image/jpeg;base64,{b64}"},
+                },
+            ],
+        })
+
+        payload: dict = {"messages": messages}
+        if cfg.model_name:
+            payload["model"] = cfg.model_name
 
         try:
             resp = await self._http.post(cfg.model_url, json=payload, headers=headers)
             resp.raise_for_status()
             data = resp.json()
-            # Expect {"detections": [{label, confidence, bbox: {x_min,y_min,x_max,y_max}}]}
-            return data.get("detections", [])
-        except httpx.HTTPError:
-            logger.exception("Model call failed")
+            content: str = data["choices"][0]["message"]["content"]
+            return self._parse_vlm_response(content)
+        except (httpx.HTTPError, KeyError, IndexError):
+            logger.exception("VLM model call failed")
             return []
+
+    def _parse_vlm_response(self, content: str) -> list[dict]:
+        """Extract a detections list from the VLM's free-text / JSON reply."""
+        content = content.strip()
+        # 1. Try direct JSON parse
+        try:
+            result = json.loads(content)
+            return result.get("detections", [])
+        except json.JSONDecodeError:
+            pass
+        # 2. Find the first JSON object that contains a 'detections' key
+        match = re.search(r'\{.*?"detections".*?\}', content, re.DOTALL)
+        if match:
+            try:
+                result = json.loads(match.group())
+                return result.get("detections", [])
+            except json.JSONDecodeError:
+                pass
+        logger.warning("Failed to parse VLM response as JSON: %.200s", content)
+        return []
 
     # ------------------------------------------------------------------
     # Snapshot storage (local filesystem)

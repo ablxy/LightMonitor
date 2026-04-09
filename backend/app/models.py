@@ -35,7 +35,7 @@ class BoundingBox(BaseModel):
 
 class DetectionResult(BaseModel):
     label: str
-    confidence: float
+    confidence: float | None = None
     bbox: BoundingBox | None = None
 
 

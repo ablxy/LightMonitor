@@ -7,7 +7,6 @@ services:
       dockerfile: Dockerfile
     ports:
       - "8000:8000"
-      - "50051:50051"
     volumes:
       - ./config:/config:ro
       - backend_data:/app/data      # SQLite 数据库及快照持久化

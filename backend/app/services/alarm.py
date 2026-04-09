@@ -12,7 +12,6 @@ import httpx
 
 
 if TYPE_CHECKING:
-    from app.config import AlarmConfig
     from app.models import FrameResult
 
 logger = logging.getLogger(__name__)
@@ -69,23 +68,29 @@ class AlarmService:
                 if d.label == algo_type and d.bbox:
                     # 1. 填充 results 数组 (x, y, w, h)
                     algo_results.append({
-                        "confidence": d.confidence,
+                        "confidence": d.confidence if d.confidence is not None else None,
                         "x": int(d.bbox.x_min),
                         "y": int(d.bbox.y_min),
                         "width": int(d.bbox.x_max - d.bbox.x_min),
                         "height": int(d.bbox.y_max - d.bbox.y_min),
                     })
                     
-                    # 2. 填充 snap.data.attributes.result.positions (x1, y1, x2, y2, conf, label)
-                    # 示例格式: [393, 412, 740, 1034, "0.7959", "person"]
-                    snap_positions.append([
+                    # 2. 填充 snap.data.attributes.result.positions
+                    # 构建基础坐标数据
+                    pos_item = [
                         int(d.bbox.x_min),
                         int(d.bbox.y_min),
                         int(d.bbox.x_max),
-                        int(d.bbox.y_max),
-                        f"{d.confidence:.4f}",
-                        d.label
-                    ])
+                        int(d.bbox.y_max)
+                    ]
+                    
+                    # confidence 存在（不为 None），则添加格式化后的字符串
+                    if d.confidence is not None:
+                        pos_item.append(f"{d.confidence:.4f}")
+                    
+                    pos_item.append(d.label)
+                    
+                    snap_positions.append(pos_item)
 
             if not algo_results:
                 continue

@@ -49,10 +49,19 @@ class AuthConfig(BaseModel):
     token: str = ""
 
 
+class VLMConfig(BaseModel):
+    """VLM-specific configuration (OpenAI-compatible protocol)."""
+    system_prompt: str = ""
+    prompt: str = ""
+
+
 class DetectionConfig(BaseModel):
     model_url: str = ""
     auth: AuthConfig = AuthConfig()
     confidence_threshold: float = 0.5
+    model_type: str = "yolo"   # "yolo" | "vlm"
+    model_name: str = ""       # model name sent in the request body
+    vlm: VLMConfig = VLMConfig()
 
 
 
