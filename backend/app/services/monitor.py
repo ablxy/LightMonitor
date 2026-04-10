@@ -243,8 +243,13 @@ class MonitorService:
 
     async def init_single_stream(self,stream_cfg: StreamConfig) -> None:
         if stream_cfg.enabled:
-            self.tasks[stream_cfg.bindId] = StreamTask(stream_cfg, self._queue)
-            await self.tasks[stream_cfg.bindId].start()
+            task = StreamTask(stream_cfg, self._queue)
+            await task.start()
+            if task._status == MonitorStatus.ERROR:
+                logger.error("Failed to start stream task for bindId %s", stream_cfg.bindId)
+                return 
+            self.tasks[stream_cfg.bindId] = task
+            logger.info("Stream task initialized for bindId %s", stream_cfg.bindId)
 
     async def remove_single_stream(self, bind_id: str) -> bool:
         """停止并移除指定 bindId 的流任务，返回是否找到该任务。"""

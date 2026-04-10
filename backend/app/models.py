@@ -83,8 +83,8 @@ class TaskConfig(BaseModel):
 
 class BindRequest(BaseModel):
     sourceSystem: str = Field(..., description="来源系统，如 SPY/HYSP")
-    bindId: str = Field(..., max_length=32, description="算法绑定请求唯一标识")
-    cameraId: str = Field(..., max_length=32, description="摄像机id")
+    bindId: str = Field(..., max_length=48, description="算法绑定请求唯一标识")
+    cameraId: str = Field(..., max_length=48, description="摄像机id")
     algorithmList: list[str] = Field(..., description="智能分析算法产品编码列表")
     # Using 'configuation' to match provided JSON key in table 1-19
     configuation: TaskConfig | None = None

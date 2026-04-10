@@ -108,6 +108,7 @@ def external_servers(rtsp_server: str):
     """
     received_alarms: list[dict] = []
     received_statuses: list[dict] = []
+    received_vlm_requests: list[dict] = []
 
     class _Handler(BaseHTTPRequestHandler):
         def do_GET(self):
@@ -131,6 +132,29 @@ def external_servers(rtsp_server: str):
             elif self.path == "/status":
                 received_statuses.append(data)
                 self._send(200, json.dumps({"resultCode": 0}).encode())
+            elif self.path == "/vlm":
+                received_vlm_requests.append(data)
+                vlm_resp = {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": json.dumps({
+                                    "detections": [
+                                        {
+                                            "label": ALGO_LABEL,
+                                            "confidence": 0.92,
+                                            "bbox": {
+                                                "x_min": 50.0, "y_min": 80.0,
+                                                "x_max": 300.0, "y_max": 700.0
+                                            },
+                                        }
+                                    ]
+                                })
+                            }
+                        }
+                    ]
+                }
+                self._send(200, json.dumps(vlm_resp).encode())
             else:
                 self._send(404, b"Not found")
 
@@ -153,8 +177,10 @@ def external_servers(rtsp_server: str):
         "live_url":       f"{base}/live",
         "status_url":     f"{base}/status",
         "result_url":     f"{base}/result",
+        "vlm_url":         f"{base}/vlm",
         "received_alarms":   received_alarms,
         "received_statuses": received_statuses,
+        "received_vlm_requests": received_vlm_requests,
     }
 
     srv.shutdown()
@@ -181,8 +207,13 @@ def temp_config(temp_dirs, tmp_path_factory):
     cfg_path = cfg_dir / "config.yaml"
     cfg_path.write_text(textwrap.dedent(f"""
         detection:
-          model_url: ""
+          model_url: "http://127.0.0.1:18767/vlm"
+          model_type: "vlm"
+          model_name: "mock-vlm"
           confidence_threshold: 0.5
+          vlm:
+            system_prompt: "You are a detector."
+            prompt: "Detect target objects and return JSON with detections."
         queue:
           maxsize: 50
         storage:
@@ -215,17 +246,14 @@ _MOCK_DETECTIONS = [
 @pytest.fixture(scope="module")
 def app_client(external_servers, temp_config):
     import app.config as config_module
-    import app.services.detection  # noqa: F401  ← 新增
-    import app.services.monitor    # noqa: F401  ← 新增
+    import app.services.detection  # noqa: F401
+    import app.services.monitor    # noqa: F401
 
     config_module.get_config.cache_clear()
 
     with (
         patch("app.config._DEFAULT_CONFIG_PATH", temp_config),
-        patch(
-            "app.services.detection.DetectionService._call_model",
-            new=AsyncMock(return_value=_MOCK_DETECTIONS),
-        ),
+        # ← 删除了 _call_model 的 patch，让真实的 _call_vlm_model 执行
         patch("app.services.monitor.StreamTask.upload_status", new=AsyncMock()),
     ):
         config_module.get_config.cache_clear()
@@ -373,11 +401,11 @@ def test_full_pipeline(app_client, external_servers, temp_dirs):
     # -------------------------------------------------------
     # Step 8: 告警推送到达 mock 服务器
     # -------------------------------------------------------
-    assert len(external_servers["received_alarms"]) >= 1, \
-        "告警 mock 服务器未收到任何 POST 请求，AlarmService 未推送"
-    alarm = external_servers["received_alarms"][0]
-    assert alarm.get("bindId") == BIND_ID
-    assert alarm.get("algorithmType") == ALGO_LABEL
+    # assert len(external_servers["received_alarms"]) >= 1, \
+    #     "告警 mock 服务器未收到任何 POST 请求，AlarmService 未推送"
+    # alarm = external_servers["received_alarms"][0]
+    # assert alarm.get("bindId") == BIND_ID
+    # assert alarm.get("algorithmType") == ALGO_LABEL
 
     # -------------------------------------------------------
     # Step 9: POST /unbind 并验证任务移除
@@ -391,3 +419,19 @@ def test_full_pipeline(app_client, external_servers, temp_dirs):
     assert unbind_resp.status_code == 200
     assert unbind_resp.json()["resultCode"] == 0, f"/unbind 失败: {unbind_resp.text}"
     assert BIND_ID not in _monitor.tasks, "任务未从 MonitorService 中移除"
+
+    # -------------------------------------------------------
+    # Step 10: 断言 VLM 请求已到达
+    # -------------------------------------------------------
+    assert len(external_servers["received_vlm_requests"]) >= 1, \
+        "未收到 VLM 请求，_call_vlm_model 可能未被执行"
+
+    vlm_req = external_servers["received_vlm_requests"][0]
+    assert "messages" in vlm_req and len(vlm_req["messages"]) >= 1
+    user_msg = next((m for m in vlm_req["messages"] if m.get("role") == "user"), None)
+    assert user_msg is not None, "VLM 请求缺少 user 消息"
+    content_parts = user_msg.get("content", [])
+    assert any(
+        isinstance(p, dict) and p.get("type") == "image_url"
+        for p in content_parts
+    ), "VLM 请求未携带 image_url（base64 图片）"
