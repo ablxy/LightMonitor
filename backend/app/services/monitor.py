@@ -241,13 +241,17 @@ class MonitorService:
         for t in self.tasks.values():
             await t.stop()
 
-    async def init_single_stream(self,stream_cfg: StreamConfig) -> None:
+    async def init_single_stream(self, stream_cfg: StreamConfig) -> None:
         if stream_cfg.enabled:
+            existing = self.tasks.get(stream_cfg.bindId)
+            if existing is not None:
+                await existing.update_config(stream_cfg)
+                return
             task = StreamTask(stream_cfg, self._queue)
             await task.start()
             if task._status == MonitorStatus.ERROR:
                 logger.error("Failed to start stream task for bindId %s", stream_cfg.bindId)
-                return 
+                return
             self.tasks[stream_cfg.bindId] = task
             logger.info("Stream task initialized for bindId %s", stream_cfg.bindId)
 
