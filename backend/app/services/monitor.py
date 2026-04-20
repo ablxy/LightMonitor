@@ -105,23 +105,49 @@ class StreamTask:
 
         async with httpx.AsyncClient() as client:
             try:
-                response = await client.request("GET", get_video_streaming_url, json=payload)
+                response = await client.get(get_video_streaming_url, params=payload)
                 response.raise_for_status()
-                result_code = response.json().get("resultCode")
-                result_desc = response.json().get("resultDesc","Unknown error")
-                if result_code ==0:
-                    video_url = response.json().get("url")
+                
+                response_data = response.json()
+                result_code = response_data.get("resultCode")
+                result_desc = response_data.get("resultDesc", "Unknown error")
+                
+                if result_code == 0:
+                    video_url = response_data.get("url")
                     if video_url:
                         logger.info("Camera %s: successfully fetched stream URL.", camera_id)
                         return video_url
                     else:
-                        logger.error("Camera %s: API returned success but 'url' field is missing.", camera_id)
-                        raise Exception("API returned success but 'url' field is missing")
+                        error_msg = "API returned success but 'url' field is missing"
+                        logger.error("Camera %s: %s", camera_id, error_msg)
+                        raise ValueError(error_msg)
                 else:
-                    logger.error("Failed to get video streaming URL for camera %s: %s", camera_id, result_desc)
-                    raise Exception(f"Failed to get video streaming URL: {result_desc}")
+                    error_msg = f"Failed to get video streaming URL,Result_Code: {result_code}, Result_Desc: {result_desc}"
+                    logger.error("Camera %s: %s", camera_id, error_msg)
+                    raise ValueError(error_msg)
+                    
             except httpx.HTTPError as e:
-                logger.error("Failed to get video streaming URL for camera %s: %s", camera_id, str(e))
+                # 网络请求错误（连接失败、超时、HTTP状态码错误等）
+                logger.error(
+                    "HTTP request failed for camera %s (URL: %s): %s - %s", 
+                    camera_id, 
+                    get_video_streaming_url, 
+                    type(e).__name__,
+                    str(e) or repr(e)
+                )
+                raise
+            except ValueError as e:
+                # 业务逻辑错误（响应格式不正确）
+                logger.error("Business logic error for camera %s: %s", camera_id, str(e))
+                raise
+            except Exception as e:
+                # 其他未预期的错误
+                logger.error(
+                    "Unexpected error getting video stream for camera %s: %s - %s",
+                    camera_id,
+                    type(e).__name__,
+                    str(e) or repr(e)
+                )
                 raise
 
     async def upload_status(self)->None:

@@ -155,9 +155,11 @@ class AlarmService:
                     if resp_data.get("resultCode") == 0:
                         logger.info("Alarm pushed successfully to %s for stream %s", url, stream_id)
                     else:
-                        logger.warning("Alarm pushed but server returned error: %s", resp_data)
+                        logger.warning("Alarm pushed but server returned error: %s and resp_data: %s", resp_data, resp_data.get("resultCode"))
                 except Exception:
                     logger.info("Alarm pushed to %s for stream %s (response not JSON)", url, stream_id)
+                    # 直接让代码继续执行到 return True，不要 continue
+                    return True
 
                 return True
             except httpx.HTTPError as exc:
@@ -169,9 +171,11 @@ class AlarmService:
                     str(exc),
                     f"; retrying in {delay:.1f}s…" if attempt < _MAX_RETRIES else "",
                 )
+                
                 if attempt < _MAX_RETRIES:
                     await asyncio.sleep(delay)
                     delay *= 2
+                    continue
 
         logger.error(
             "All %d alarm push attempts failed for stream %s",
