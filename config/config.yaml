@@ -2,11 +2,16 @@
 
 
 detection:
-  model_url: "http://localhost:8501/v1/models/yolo:predict"
+  model_url: "http://maas.gd.chinamobile.com:36007/ai/aiFactoryServer/v1/apis/1/v1/chat/completions"
   auth:
-    type: "api_key"           # Options: api_key, bearer, none
-    token: ""
+    type: "Bearer"           # Options: accessKeyId, Bearer, none
+    token: "your_api_token_here"
   confidence_threshold: 0.5
+  model_type: "vlm"        # Options: vlm, yolo
+  model_name: "Qwen3-VL-8B"       
+  vlm:
+    system_prompt: ""
+    prompt: "Detect all trucks. Output only a JSON code block: ```json {\"detections\": [{\"label\": \"truck\", \"confidence\": 0.0-1.0 or null, \"bbox\": [x_min, y_min, x_max, y_max] }]}``` No other text."
 
 
 queue: 
