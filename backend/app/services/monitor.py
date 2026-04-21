@@ -277,7 +277,7 @@ class MonitorService:
             await task.start()
             if task._status == MonitorStatus.ERROR:
                 logger.error("Failed to start stream task for bindId %s", stream_cfg.bindId)
-                return
+                return  # 只是 return，不抛异常！
             self.tasks[stream_cfg.bindId] = task
             logger.info("Stream task initialized for bindId %s", stream_cfg.bindId)
 

@@ -99,6 +99,10 @@ class BindResponse(BaseModel):
     resultCode: int = 0
     resultDesc: str = "任务下发成功"
 
+class UnbindResponse(BaseModel):
+    resultCode: int = 0
+    resultDesc: str = "解绑1条数据"
+
 
 
 class TaskStatus(BaseModel):

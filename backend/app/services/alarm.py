@@ -157,7 +157,7 @@ class AlarmService:
                     else:
                         logger.warning("Alarm pushed but server returned error: %s and resp_data: %s", resp_data, resp_data.get("resultCode"))
                 except Exception:
-                    logger.info("Alarm pushed to %s for stream %s (response not JSON)", url, stream_id)
+                    logger.error("Alarm pushed to %s for stream %s (response not JSON)", url, stream_id)
                     # 直接让代码继续执行到 return True，不要 continue
                     return True
 
