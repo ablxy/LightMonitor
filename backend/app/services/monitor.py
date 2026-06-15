@@ -81,7 +81,11 @@ class StreamTask:
         need_restart = (self._cfg.live_url != new_cfg.live_url)
         self._cfg = new_cfg
         
-        if need_restart and self._status == MonitorStatus.RUNNING:
+        if self._status not in (MonitorStatus.RUNNING, MonitorStatus.STARTING):
+            # 非运行状态，直接启动
+            await self.start()
+        elif need_restart:
+            # 运行中但 URL 变了，重启
             await self.stop()
             await self.start()
 
@@ -105,7 +109,7 @@ class StreamTask:
 
         async with httpx.AsyncClient() as client:
             try:
-                response = await client.get(get_video_streaming_url, params=payload)
+                response = await client.request("GET", get_video_streaming_url, json=payload)
                 response.raise_for_status()
                 
                 response_data = response.json()
@@ -150,10 +154,13 @@ class StreamTask:
                 )
                 raise
 
-    async def upload_status(self)->None:
+    async def upload_status(self) -> None:
         url = self._cfg.report.status_report_url
+        if not url:
+            logger.debug("No status_report_url configured for stream %s, skipping", self.stream_id)
+            return
         payload = {
-            "algorithmType": 1,
+            "algorithmType": self._cfg.labels[0] if self._cfg.labels else "",
             "bindId": self.stream_id,
             "cameraId": self.stream_name,
             "status": self._status.value,
@@ -162,9 +169,9 @@ class StreamTask:
             try:
                 response = await client.post(url, json=payload)
                 response.raise_for_status()
-                logger.info("Status report sent for stream %s", self.stream_id)
+                logger.info("Status report sent for stream %s，URL: %s", self.stream_id, url)
             except httpx.HTTPError as e:
-                logger.error("Failed to send status report for stream %s: %s", self.stream_id, str(e))
+                logger.error("Failed to send status report for stream %s: %s，URL: %s", self.stream_id, str(e), url)
 
     async def _run_loop(self,rtsp_url:str) -> None:
         interval = self._compute_interval()
