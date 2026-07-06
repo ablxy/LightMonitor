@@ -46,7 +46,6 @@ class FrameResult(BaseModel):
     detections: list[DetectionResult] = Field(default_factory=list)
     alarmed: bool = False
     image_base64: str | None = None
-
 class AlarmAttributes(BaseModel):
     """
     Table 1-22: 结构化属性。
