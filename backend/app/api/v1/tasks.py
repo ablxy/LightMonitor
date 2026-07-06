@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import os
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse
 
 from app.models import FrameResult, HistoryRecord, TaskDetail, TaskStatus
+from app.api.v1.algo_auth import verify_basic_auth
 
 router = APIRouter(prefix="/api/v1", tags=["tasks"])
 
@@ -30,7 +31,7 @@ def init_router(monitor_service, detection_service, db_service, snapshots_dir: s
 # GET /api/v1/tasks
 # ------------------------------------------------------------------
 
-@router.get("/tasks", response_model=list[TaskStatus])
+@router.get("/tasks", response_model=list[TaskStatus], dependencies=[Depends(verify_basic_auth)])
 async def list_tasks():
     """Return all configured stream tasks and their current status."""
     if _monitor_service is None:
@@ -54,7 +55,7 @@ async def list_tasks():
 # GET /api/v1/tasks/{task_id}
 # ------------------------------------------------------------------
 
-@router.get("/tasks/{task_id}", response_model=TaskDetail)
+@router.get("/tasks/{task_id}", response_model=TaskDetail, dependencies=[Depends(verify_basic_auth)])
 async def get_task(task_id: str):
     """Return status and recent results for a single task."""
     if _monitor_service is None or _detection_service is None:
@@ -79,7 +80,7 @@ async def get_task(task_id: str):
 # GET /api/v1/tasks/{task_id}/results
 # ------------------------------------------------------------------
 
-@router.get("/tasks/{task_id}/results", response_model=list[FrameResult])
+@router.get("/tasks/{task_id}/results", response_model=list[FrameResult], dependencies=[Depends(verify_basic_auth)])
 async def get_results(
     task_id: str,
     limit: int = Query(20, ge=1, le=100),
@@ -98,7 +99,7 @@ async def get_results(
 # GET /api/v1/history
 # ------------------------------------------------------------------
 
-@router.get("/history")
+@router.get("/history", dependencies=[Depends(verify_basic_auth)])
 async def get_history(
     stream_id: str | None = Query(None, description="Filter by stream ID"),
     start_ms: int | None = Query(None, description="Start timestamp (ms, inclusive)"),
@@ -122,7 +123,7 @@ async def get_history(
 # GET /api/v1/snapshots/{stream_id}/{filename}
 # ------------------------------------------------------------------
 
-@router.get("/snapshots/{stream_id}/{filename}")
+@router.get("/snapshots/{stream_id}/{filename}", dependencies=[Depends(verify_basic_auth)])
 async def get_snapshot(stream_id: str, filename: str):
     """Serve a stored snapshot image from the local filesystem."""
     # Prevent path traversal

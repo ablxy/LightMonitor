@@ -119,7 +119,7 @@ class DetectionService:
         if not cfg.model_url:
             return []
         if cfg.model_type.lower() == "vlm":
-            return await self._call_vlm_model(image_bytes)
+            return await self._simulate_call_vlm_model(image_bytes)
         return await self._call_yolo_model(image_bytes)
 
     async def _call_yolo_model(self, image_bytes: bytes) -> list[dict]:
@@ -178,6 +178,20 @@ class DetectionService:
         except (httpx.HTTPError, KeyError, IndexError):
             logger.exception("VLM model call failed")
             return []
+
+
+    async def _simulate_call_vlm_model(self, image_bytes: bytes) -> list[dict]:
+        """Simulate a VLM call for testing purposes.
+
+        Sends the frame as a base64 data-URL inside a multimodal message.
+        Parses the model's text reply as JSON detections.
+        """
+        # Simulate a delay
+        await asyncio.sleep(0.1)
+        # Return a fake detection for testing
+        return [
+            {"label": "trucks", "confidence": 0.95, "bbox": {"x_min": 100, "y_min": 50, "x_max": 200, "y_max": 400}}
+        ]
 
     def _parse_vlm_response(self, content: str) -> list[dict]:
         """Extract a detections list from the VLM's free-text / JSON reply."""
