@@ -4,6 +4,7 @@ from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks
 from app.models import BindRequest, BindResponse, UnbindRequest, UnbindResponse
 from app.services.monitor import MonitorService
 from app.config import StreamConfig, ReportConfig
+from app.api.v1.algo_auth import verify_basic_auth
 import logging
 import re
 
@@ -23,7 +24,7 @@ def init_binding_router(monitor_service: MonitorService):
     _monitor_service = monitor_service
 
 
-@router.post("/bind", response_model=BindResponse)
+@router.post("/bind", response_model=BindResponse,dependencies=[Depends(verify_basic_auth)])
 async def bind_algorithm(req: BindRequest, background_tasks: BackgroundTasks):
     """
     Table 1-18: Algorithm platform binds functionality to a camera.
@@ -102,7 +103,7 @@ async def bind_algorithm(req: BindRequest, background_tasks: BackgroundTasks):
     return BindResponse(resultCode=0, resultDesc="SUCCESS")
 
 
-@router.post("/unbind", response_model=UnbindResponse)
+@router.post("/unbind", response_model=UnbindResponse, dependencies=[Depends(verify_basic_auth)])
 async def unbind_algorithm(req: UnbindRequest):
     """
     算法解绑接口：停止并移除指定 bindId 的流任务。
