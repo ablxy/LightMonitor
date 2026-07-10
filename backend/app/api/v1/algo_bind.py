@@ -50,8 +50,7 @@ async def bind_algorithm(req: BindRequest, background_tasks: BackgroundTasks):
     # )
 
     # 入口的虚拟机实地址
-    mapping_live_url = re.sub(r"(\d+\.\d+\.\d+\.)\d+", r"\g<1>245", req.liveUrl)
-    # mapping_live_url = "http://172.23.31.245:10000/api/sapa/media/live"
+    mapping_live_url = req.liveUrl
 
     logger.info(
         "Mapping liveUrl from %s to %s for bindId %s",
