@@ -109,7 +109,7 @@ class StreamTask:
 
         async with httpx.AsyncClient() as client:
             try:
-                response = await client.request("GET", get_video_streaming_url, json=payload)
+                response = await client.request("POST", get_video_streaming_url, json=payload)
                 response.raise_for_status()
                 
                 response_data = response.json()
@@ -278,6 +278,7 @@ class MonitorService:
         if stream_cfg.enabled:
             existing = self.tasks.get(stream_cfg.bindId)
             if existing is not None:
+                logger.info("Stream task for bindId %s already exists, updating config.", stream_cfg.bindId)
                 await existing.update_config(stream_cfg)
                 return
             task = StreamTask(stream_cfg, self._queue)
