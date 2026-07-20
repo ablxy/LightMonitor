@@ -19,8 +19,6 @@ from pydantic import BaseModel, Field
 # ---------------------------------------------------------------------------
 
 class ReportConfig(BaseModel):
-    # status_report_url: str = "http://1.1.1.1:8080/report/task_status?platformId=0001"
-    # result_report_url: str = "http://1.1.1.1:8080/report/task_result?platformId=0001"
     status_report_url: str|None = Field(default=None,alias="statusReportUrl", description="任务状态上报URL")
     result_report_url: str|None = Field(default=None,alias="resultReportUrl", description="任务结果上报URL")
 

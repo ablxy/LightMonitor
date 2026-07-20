@@ -39,15 +39,6 @@ async def bind_algorithm(req: BindRequest, background_tasks: BackgroundTasks):
     # liveUrl -> rtsp_url
     # algorithmList -> labels (Simple mapping strategy: use algo codes as labels or map them)
     labels = req.algorithmList
-    report_config = ReportConfig(
-        # status_report_url=req.report.status_report_url,  # type: ignore
-        # result_report_url=req.report.result_report_url  # type: ignore
-    )
-
-    # report_config = ReportConfig(
-    #     status_report_url="http://172.23.31.245:10000/api/sapa/report/status",   # type: ignore
-    #     result_report_url="http://172.23.31.245:10000/api/sapa/media/live"  # type: ignore
-    # )
 
     # 入口的虚拟机实地址
     mapping_live_url = req.liveUrl
@@ -66,7 +57,7 @@ async def bind_algorithm(req: BindRequest, background_tasks: BackgroundTasks):
         enabled=True,
         labels=labels,
         # Determine FPS/Interval from configuation if needed, or default
-        report=report_config,
+        report=req.report,
     )
     logger.info(
         "Received bind request: bindId=%s, cameraId=%s, algorithms=%s",

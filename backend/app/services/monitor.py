@@ -6,6 +6,7 @@ import asyncio
 import logging
 import time
 from typing import TYPE_CHECKING
+from urllib.parse import unquote
 import httpx
 import cv2
 
@@ -57,17 +58,17 @@ class StreamTask:
     # ------------------------------------------------------------------
 
     async def start(self) -> None:
-        if self._status == MonitorStatus.RUNNING:
+        if self._task and not self._task.done():
+            logger.info("Stream task %s is already active with status %s", self.stream_id, self._status.name)
             return
         self._status = MonitorStatus.STARTING
 
         try:
-            rtsp_url = await self.get_video_streaming()
-            logging.info("Starting stream task %s with RTSP URL: %s", self.stream_id, rtsp_url)
-            
+            logging.info("Starting stream task %s", self.stream_id)
+
             self._status = MonitorStatus.RUNNING
-            
-            self._task = asyncio.create_task(self._run_loop(rtsp_url))
+
+            self._task = asyncio.create_task(self._run_loop())
 
             await self.upload_status()
         except Exception as e:
@@ -173,25 +174,66 @@ class StreamTask:
             except httpx.HTTPError as e:
                 logger.error("Failed to send status report for stream %s: %s，URL: %s", self.stream_id, str(e), url)
 
-    async def _run_loop(self,rtsp_url:str) -> None:
+    async def _run_loop(self) -> None:
         interval = self._compute_interval()
         reconnect_delay = 2.0
         max_reconnect_delay = 30.0
+        retry_count = 0
+        max_retries = 3
 
-        while self._status == MonitorStatus.RUNNING:
-            cap = cv2.VideoCapture(rtsp_url)
+        while self._status in (MonitorStatus.RUNNING, MonitorStatus.ERROR):
+            try:
+                rtsp_url = await self.get_video_streaming()
+                rtsp_url = unquote(rtsp_url)
+                logger.info("Opening RTSP stream %s (%s)", self._cfg.bindId, rtsp_url)
+                cap = await asyncio.to_thread(cv2.VideoCapture, rtsp_url)
+            except Exception as e:
+                self._status = MonitorStatus.ERROR
+                retry_count += 1
+                if retry_count > max_retries:
+                    logger.error(
+                        "Stream %s failed after %d retries, giving up.",
+                        self._cfg.bindId, max_retries,
+                    )
+                    await self.upload_status()
+                    return
+                logger.warning(
+                    "Failed to prepare RTSP stream %s: %s, retrying in %.0fs… (%d/%d)",
+                    self._cfg.bindId,
+                    str(e) or repr(e),
+                    reconnect_delay,
+                    retry_count,
+                    max_retries,
+                )
+                await self.upload_status()
+                await asyncio.sleep(reconnect_delay)
+                reconnect_delay = min(reconnect_delay * 2, max_reconnect_delay)
+                continue
 
             if not cap.isOpened():
                 self._status = MonitorStatus.ERROR
+                retry_count += 1
+                if retry_count > max_retries:
+                    logger.error(
+                        "Stream %s failed after %d retries, giving up.",
+                        self._cfg.bindId, max_retries,
+                    )
+                    cap.release()
+                    await self.upload_status()
+                    return
                 logger.warning(
-                    "Cannot open RTSP stream %s (%s), retrying in %.0fs…",
+                    "Cannot open RTSP stream %s (%s), retrying in %.0fs… (%d/%d)",
                     self._cfg.bindId, rtsp_url, reconnect_delay,
+                    retry_count, max_retries,
                 )
+                cap.release()
+                await self.upload_status()
                 await asyncio.sleep(reconnect_delay)
                 reconnect_delay = min(reconnect_delay * 2, max_reconnect_delay)
                 continue
 
             reconnect_delay = 2.0
+            retry_count = 0
             self._status = MonitorStatus.RUNNING
             logger.info("Connected to RTSP stream %s (%s)", self._cfg.bindId, rtsp_url)
 
@@ -201,6 +243,8 @@ class StreamTask:
                     if not ret:
                         logger.warning("Lost RTSP stream %s, reconnecting…", self._cfg.bindId)
                         self._status = MonitorStatus.ERROR
+                        retry_count += 1
+                        await self.upload_status()
                         break
 
                     # JPEG encode
@@ -281,6 +325,7 @@ class MonitorService:
                 logger.info("Stream task for bindId %s already exists, updating config.", stream_cfg.bindId)
                 await existing.update_config(stream_cfg)
                 return
+            logger.debug("【monitor】Initializing stream task with config: %s", stream_cfg)
             task = StreamTask(stream_cfg, self._queue)
             await task.start()
             if task._status == MonitorStatus.ERROR:
