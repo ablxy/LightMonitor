@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import logging
 
 from datetime import datetime
@@ -123,6 +124,7 @@ class AlarmService:
                     "data": snap_data_payload,
                     "captureBase64": result.image_base64 or "",
                     "captureTime": capture_time,
+                    "imageUrl": image_url,
                 },
             }
 
@@ -136,12 +138,22 @@ class AlarmService:
         self, url: str, payload: dict, stream_id: str
     ) -> bool:
         """Helper to send a single payload with retries."""
+        # 默认带 Basic 鉴权头，复用全局 api_auth（与外部平台约定）。
+        from app.config import get_config
+        cfg = get_config()
+        cred = f"{cfg.api_auth.username}:{cfg.api_auth.password}"
+        basic_token = base64.b64encode(cred.encode("utf-8")).decode("ascii")
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Basic {basic_token}",
+        }
         delay = _RETRY_BASE_DELAY
         for attempt in range(1, _MAX_RETRIES + 1):
             try:
                 resp = await self._client.post(
                     url,
                     json=payload,
+                    headers=headers,
                 )
                 # 记录详细的响应内容有助于调试
                 if resp.status_code != 200:

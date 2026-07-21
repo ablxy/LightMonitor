@@ -9,6 +9,7 @@ import collections
 import json
 import logging
 import os
+import random
 import re
 import time
 from typing import TYPE_CHECKING
@@ -187,10 +188,10 @@ class DetectionService:
         Parses the model's text reply as JSON detections.
         """
         # Simulate a delay
-        await asyncio.sleep(0.1)
+        await asyncio.sleep(5)
         # Return a fake detection for testing
         return [
-            {"label": "trucks", "confidence": 0.95, "bbox": {"x_min": 100, "y_min": 50, "x_max": 200, "y_max": 400}}
+            {"label": "41814000001", "confidence": 0.95, "bbox": {"x_min": 100, "y_min": 50, "x_max": 200, "y_max": 400}}
         ]
 
     def _parse_vlm_response(self, content: str) -> list[dict]:
@@ -265,6 +266,11 @@ class DetectionService:
         # Determine if any detection matches a target label -> alarm
         alarmed = any(det.label in task.target_labels for det in detections)
 
+        # 40% 概率随机中标（用于测试告警链路）
+        if not alarmed and random.random() < 0.4:
+            alarmed = True
+            logger.info("Random alarm triggered for task %s (40%% chance)", task.task_id)
+
         b64_image = base64.b64encode(task.image_data).decode()
         frame_result = FrameResult(
             stream_id=task.bindId,
@@ -281,7 +287,8 @@ class DetectionService:
                 maxlen=MAX_RESULTS_PER_STREAM
             )
         self.results[task.bindId].appendleft(frame_result)
-
+        
+        logging.debug("获取到的结果：%s",self.results)
         if alarmed:
             # Save snapshot to local filesystem
             image_url = await self._save_snapshot(task)

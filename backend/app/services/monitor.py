@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import logging
 import time
 from typing import TYPE_CHECKING
@@ -166,9 +167,17 @@ class StreamTask:
             "cameraId": self.stream_name,
             "status": self._status.value,
         }
+        from app.config import get_config
+        cfg = get_config()
+        cred = f"{cfg.api_auth.username}:{cfg.api_auth.password}"
+        basic_token = base64.b64encode(cred.encode("utf-8")).decode("ascii")
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Basic {basic_token}",
+        }
         async with httpx.AsyncClient() as client:
             try:
-                response = await client.post(url, json=payload)
+                response = await client.post(url, json=payload, headers=headers)
                 response.raise_for_status()
                 logger.info("Status report sent for stream %s，URL: %s", self.stream_id, url)
             except httpx.HTTPError as e:
@@ -183,8 +192,11 @@ class StreamTask:
 
         while self._status in (MonitorStatus.RUNNING, MonitorStatus.ERROR):
             try:
-                rtsp_url = await self.get_video_streaming()
-                rtsp_url = unquote(rtsp_url)
+                #rtsp_url = await self.get_video_streaming()
+                #rtsp_url = unquote(rtsp_url)
+
+                #模拟rtsp地址
+                rtsp_url = "rtsp://10.1.0.12:8554/mock"
                 logger.info("Opening RTSP stream %s (%s)", self._cfg.bindId, rtsp_url)
                 cap = await asyncio.to_thread(cv2.VideoCapture, rtsp_url)
             except Exception as e:
