@@ -7,7 +7,7 @@ import base64
 import logging
 
 from datetime import datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import httpx
 
@@ -24,7 +24,8 @@ _RETRY_BASE_DELAY = 1.0  # seconds; doubles on each retry
 class AlarmService:
     """HTTP client that POSTs alarm payloads to an external system."""
 
-    def __init__(self) -> None:
+    def __init__(self, config: Any = None) -> None:
+        self._config = config
         self._client = httpx.AsyncClient(timeout=10.0)
 
     # ------------------------------------------------------------------
@@ -78,7 +79,7 @@ class AlarmService:
                     
                     # 2. 填充 snap.data.attributes.result.positions
                     # 构建基础坐标数据
-                    pos_item = [
+                    pos_item: list[object] = [
                         int(d.bbox.x_min),
                         int(d.bbox.y_min),
                         int(d.bbox.x_max),

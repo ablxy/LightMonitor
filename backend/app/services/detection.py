@@ -37,7 +37,7 @@ class DetectionService:
         config: AppConfig,
         alarm_service: AlarmService,
         queue: asyncio.Queue,
-        db_service: DatabaseService,
+        db_service: DatabaseService | None = None,
         num_workers: int = 4,
     ) -> None:
         self._config = config
@@ -238,7 +238,8 @@ class DetectionService:
 
     async def _write_record(self, record: HistoryRecord) -> None:
         """Persist a HistoryRecord to the SQLite database."""
-        await self._db.write_record(record)
+        if self._db is not None:
+            await self._db.write_record(record)
 
     # ------------------------------------------------------------------
     # Frame processing pipeline
@@ -265,11 +266,6 @@ class DetectionService:
 
         # Determine if any detection matches a target label -> alarm
         alarmed = any(det.label in task.target_labels for det in detections)
-
-        # 40% 概率随机中标（用于测试告警链路）
-        if not alarmed and random.random() < 0.4:
-            alarmed = True
-            logger.info("Random alarm triggered for task %s (40%% chance)", task.task_id)
 
         b64_image = base64.b64encode(task.image_data).decode()
         frame_result = FrameResult(

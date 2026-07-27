@@ -7,11 +7,11 @@ so the rest of the application never deals with raw dicts.
 from __future__ import annotations
 
 import os
-from pathlib import Path
 from functools import lru_cache
+from pathlib import Path
 
 import yaml
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 # ---------------------------------------------------------------------------
@@ -38,7 +38,18 @@ class StreamConfig(BaseModel):
     enabled: bool = True
     frame_extraction: FrameExtractionConfig = FrameExtractionConfig()
     labels: list[str] = Field(default_factory=list)
-    report: ReportConfig
+    report: ReportConfig = ReportConfig()
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_legacy_fields(cls, value: object) -> object:
+        if not isinstance(value, dict):
+            return value
+        data = dict(value)
+        data.setdefault("bindId", data.pop("id", None))
+        data.setdefault("cameraId", data.pop("name", None))
+        data.setdefault("live_url", data.pop("rtsp_url", None))
+        return data
 
 
 
@@ -62,15 +73,85 @@ class DetectionConfig(BaseModel):
     vlm: VLMConfig = VLMConfig()
 
 
+class AlarmConfig(BaseModel):
+    enabled: bool = False
+    webhook_url: str = ""
+    auth: AuthConfig = AuthConfig()
+
+
+class RustfsConfig(BaseModel):
+    """Backward-compatible name used by the existing manual upload test."""
+
+    endpoint: str = "localhost:9000"
+    access_key: str = "minioadmin"
+    secret_key: str = "minioadmin"
+    bucket: str = "lightmonitor"
+    secure: bool = False
+
+
 
 
 class QueueConfig(BaseModel):
     maxsize: int = 100
+    backend: str = "memory"
+    redis_url: str = "redis://localhost:6379/0"
+    task_queue: str = "lightmonitor:vlm_tasks"
+    alarm_queue: str = "lightmonitor:alarm_save"
+    result_ttl_seconds: int = 3600
 
 
 class StorageConfig(BaseModel):
     db_path: str = "data/lightmonitor.db"
     snapshots_dir: str = "data/snapshots"
+
+
+class MysqlConfig(BaseModel):
+    """MySQL 5.7-compatible connection settings for the target architecture."""
+
+    url: str = "mysql+pymysql://lightmonitor:lightmonitor@localhost:3306/lightmonitor"
+    pool_size: int = 10
+    max_overflow: int = 20
+    pool_recycle_seconds: int = 1800
+
+
+class MinioConfig(BaseModel):
+    """S3-compatible object storage settings.
+
+    ``endpoint`` deliberately has no scheme because the MinIO SDK expects a
+    host:port value. The URL form remains available for generated links.
+    """
+
+    endpoint: str = "localhost:9000"
+    access_key: str = "minioadmin"
+    secret_key: str = "minioadmin"
+    bucket: str = "lightmonitor"
+    secure: bool = False
+    presigned_url_expire_seconds: int = 3600
+
+
+class WorkerConfig(BaseModel):
+    producer_workers: int = 1
+    consumer_workers: int = 1
+    consumer_threads_per_worker: int = 4
+    heartbeat_interval_seconds: int = 10
+    max_retries: int = 3
+
+
+class RagConfig(BaseModel):
+    enabled: bool = False
+    persist_directory: str = "data/chroma"
+    collection_name: str = "lightmonitor_rules"
+    top_k: int = 5
+
+
+class TemporalConfig(BaseModel):
+    window_seconds: float = 5.0
+    frames_count: int = 8
+
+
+class ServerConfig(BaseModel):
+    host: str = "0.0.0.0"
+    port: int = 8000
 
 
 class LoggingConfig(BaseModel):
@@ -88,11 +169,19 @@ class ApiAuthConfig(BaseModel):
 class AppConfig(BaseModel):
     streams: list[StreamConfig] = Field(default_factory=list)
     detection: DetectionConfig = DetectionConfig()
+    alarm: AlarmConfig = AlarmConfig()
     queue: QueueConfig = QueueConfig()
     storage: StorageConfig = StorageConfig()
     logging: LoggingConfig = LoggingConfig()
     api_auth: ApiAuthConfig = ApiAuthConfig()
     report: ReportConfig = ReportConfig()
+    mysql: MysqlConfig = MysqlConfig()
+    minio: MinioConfig = MinioConfig()
+    rustfs: RustfsConfig = RustfsConfig()
+    workers: WorkerConfig = WorkerConfig()
+    rag: RagConfig = RagConfig()
+    temporal: TemporalConfig = TemporalConfig()
+    server: ServerConfig = ServerConfig()
 
 
 # ---------------------------------------------------------------------------

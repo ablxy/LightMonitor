@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 
 from app.config import ReportConfig
 
-class MonitorStatus(Enum):
+class MonitorStatus(str, Enum):
     """
 智能分析任务状态
 0-初始化
@@ -20,11 +20,11 @@ class MonitorStatus(Enum):
     Args:
         Enum (_type_): _description_
     """
-    INIT= 0
-    STARTING = 1
-    RUNNING = 2
-    STOP = 3
-    ERROR = 4
+    INIT = "offline"
+    STARTING = "starting"
+    RUNNING = "running"
+    STOP = "stopped"
+    ERROR = "error"
 
 class BoundingBox(BaseModel):
     x_min: float
