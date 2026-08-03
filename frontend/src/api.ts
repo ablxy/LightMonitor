@@ -32,6 +32,7 @@ export type HistoryRecord = {
 export type Credentials = { username: string; password: string };
 
 const credentialsKey = 'lightmonitor.credentials';
+const API_BASE_URL = 'http://10.1.0.12:10000';
 
 export function getCredentials(): Credentials | null {
   const raw = sessionStorage.getItem(credentialsKey);
@@ -53,7 +54,7 @@ function authHeader(): HeadersInit {
 }
 
 async function request<T>(path: string): Promise<T> {
-  const response = await fetch(path, { headers: authHeader() });
+  const response = await fetch(`${API_BASE_URL}${path}`, { headers: authHeader() });
   if (!response.ok) {
     const message = response.status === 401 || response.status === 403
       ? '认证失败，请检查用户名和密码。'

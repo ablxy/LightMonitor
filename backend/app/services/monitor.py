@@ -47,6 +47,11 @@ class StreamTask:
     def labels(self) -> list[str]:
         return self._cfg.labels
 
+    @property
+    def status(self) -> str:
+        """Return the public, JSON-friendly task status for API consumers."""
+        return self._status.name.lower()
+
     def _compute_interval(self) -> float:
         """Return the sleep interval in seconds between frame extractions."""
         fe = self._cfg.frame_extraction

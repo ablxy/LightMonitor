@@ -29,6 +29,9 @@ COPY --from=builder /install /usr/local
 # 复制应用源码
 COPY backend/app/ ./app/
 
+# 在构建阶段提前检查 Python 语法和缩进，避免容器启动时才失败
+RUN python -m compileall -q app
+
 # 创建 SQLite 数据库目录、快照目录及日志目录
 RUN mkdir -p data/snapshots logs
 
