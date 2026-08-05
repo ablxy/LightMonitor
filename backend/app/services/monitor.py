@@ -192,11 +192,11 @@ class StreamTask:
 
         while self._status in (MonitorStatus.RUNNING, MonitorStatus.ERROR):
             try:
-                #rtsp_url = await self.get_video_streaming()
-                #rtsp_url = unquote(rtsp_url)
+                rtsp_url = await self.get_video_streaming()
+                rtsp_url = unquote(rtsp_url)
 
                 #模拟rtsp地址
-                rtsp_url = "rtsp://10.1.0.12:8554/mock"
+                # rtsp_url = "rtsp://10.1.0.12:8554/mock"
                 logger.info("Opening RTSP stream %s (%s)", self._cfg.bindId, rtsp_url)
                 cap = await asyncio.to_thread(cv2.VideoCapture, rtsp_url)
             except Exception as e:

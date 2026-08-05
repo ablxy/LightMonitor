@@ -1,5 +1,4 @@
 # ── Stage 1: 安装 Python 依赖 ─────────────────────────────────────────────────
-FROM python:3.12-slim AS builder
 FROM docker.m.daocloud.io/library/python:3.12-slim AS builder
 
 WORKDIR /build
@@ -9,11 +8,20 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/*
 
 COPY backend/requirements.txt .
-RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
+
+# 国内服务器从默认 PyPI 下载大型 OpenCV wheel 可能非常慢；镜像地址可在构建时覆盖。
+ARG PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
+ARG PIP_TIMEOUT=120
+RUN python -m pip install \
+    --no-cache-dir \
+    --prefix=/install \
+    --index-url="${PIP_INDEX_URL}" \
+    --timeout="${PIP_TIMEOUT}" \
+    --retries=5 \
+    -r requirements.txt
 
 
 # ── Stage 2: 后端运行时镜像 ───────────────────────────────────────────────────
-FROM python:3.12-slim AS backend
 FROM docker.m.daocloud.io/library/python:3.12-slim AS backend
 
 WORKDIR /app
@@ -28,6 +36,9 @@ COPY --from=builder /install /usr/local
 
 # 复制应用源码
 COPY backend/app/ ./app/
+
+# 在构建阶段提前检查 Python 语法和缩进，避免容器启动时才失败
+RUN python -m compileall -q app
 
 # 创建 SQLite 数据库目录、快照目录及日志目录
 RUN mkdir -p data/snapshots logs
