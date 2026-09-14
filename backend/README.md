@@ -1,40 +1,112 @@
 # LightMonitor
 
-LightMonitor 是一个轻量级、配置驱动的**视频流 AI 分析平台**。系统支持实时拉取 RTSP 视频流，通过异步队列分发帧数据，调用 AI 模型进行检测，并通过 Web 面板实时展示检测结果。当检测到目标标签时，系统会通过 Webhook 向外部系统发送告警，并支持将检测结果图片持久化存储到兼容 S3 的对象存储（RustFS）中。
+LightMonitor 是一个轻量级、配置驱动的**视频流 AI 分析平台**。系统支持动态绑定 RTSP 视频流，通过有界异步队列分发帧任务并调用 AI 模型检测。命中目标后，系统会保存本地快照、将历史记录写入 SQLite，并通过独立的告警队列向外部系统发送 Webhook。
 
 ## 核心架构
 
-系统采用 Python 3.12 + FastAPI 构建单体应用，内部模块通过 \`asyncio.Queue\` 进行高效的异步通信。
+系统采用 Python 3.12 + FastAPI 构建单体应用，内部划分为任务控制、视频采集、检测和告警四个模块。
 
-\`\`\`
-┌─────────────┐  Queue  ┌──────────────────┐  HTTP/S3  ┌───────────────┐
-│  Monitor    │ ──────► │  Detection       │ ◄───────► │  Object Store │
-│  Service    │         │  Service         │           │  (RustFS/S3)  │
-│  (RTSP Reader)        │  (Inference)     │           └───────────────┘
-└─────────────┘         └──────────────────┘
-        ▲                        │
-        │ API Control            │ Webhook (Result/Status)
-        │                        ▼
-┌─────────────┐         ┌──────────────────┐
-│  REST API   │ ◄─────► │  External System │
-│  (FastAPI)  │         │  (Callback)      │
-└─────────────┘         └──────────────────┘
-        ▲
-        │ HTTP
-        ▼
-┌─────────────┐
-│  Frontend   │
-│  (React)    │
-└─────────────┘
-\`\`\`
+```mermaid
+flowchart TB
+    subgraph ACCESS[接入层]
+        UI[React 前端]
+        PLATFORM[外部任务平台]
+        API[FastAPI REST API<br/>鉴权、任务控制、统一错误响应]
+        UI <-->|查询任务和结果| API
+        PLATFORM -->|绑定或解绑任务| API
+    end
 
-| 组件 | 技术栈 |
-|-----------|-----------|
-| Backend   | Python 3.12, FastAPI, OpenCV, asyncio, httpx, boto3 |
-| Frontend  | React 18, TypeScript, Vite |
-| Protocol  | REST API (UI & Control), Webhook (Reporting) |
-| Storage   | S3 Compatible (Images), JSONL (Logs) |
-| Deploy    | Docker / Docker Compose |
+    subgraph PIPELINE[视频检测链路]
+        BIND[绑定管理]
+        MONITOR[Monitor Service<br/>共享拉流、解码、按绑定抽帧]
+        FRAME_QUEUE[(有界检测队列<br/>满队列丢帧、过期帧淘汰)]
+        DETECT[Detection Worker Pool<br/>同帧共享推理、独立阈值过滤]
+        RESULT[最近结果内存缓存]
+        STORE[(SQLite 历史记录<br/>本地 JPEG 快照)]
+
+        BIND --> MONITOR
+        MONITOR --> FRAME_QUEUE
+        FRAME_QUEUE --> DETECT
+        DETECT --> RESULT
+        DETECT -->|命中目标| STORE
+    end
+
+    subgraph OUTBOUND[主动上报链路]
+        STATUS[任务状态上报<br/>启动、运行、异常、停止]
+        ALARM_QUEUE[(有界告警队列)]
+        ALARM[Alarm Worker Pool<br/>组装告警、失败重试]
+
+        ALARM_QUEUE --> ALARM
+    end
+
+    API --> BIND
+    RESULT --> API
+    STORE --> API
+
+    CAMERA[RTSP 摄像头] -->|视频流| MONITOR
+    DETECT <-->|HTTP 推理| MODEL[YOLO 或 VLM 模型服务]
+
+    MONITOR -->|状态变化| STATUS
+    STATUS -->|主动 POST statusReportUrl| CALLBACK[外部回调服务]
+    DETECT -->|检测命中及快照| ALARM_QUEUE
+    ALARM -->|主动 POST resultReportUrl<br/>最多 3 次指数退避重试| CALLBACK
+
+    APP_LOG[结构化日志<br/>request_id、脱敏、轮转]
+    API -.-> APP_LOG
+    MONITOR -.-> APP_LOG
+    DETECT -.-> APP_LOG
+    ALARM -.-> APP_LOG
+```
+
+处理流程：
+
+1. 前端或外部系统通过 REST API 查询、绑定或解绑检测任务。
+2. 相同 `cameraId` 和 `liveUrl` 的多个绑定共享一路 RTSP 连接，避免重复拉流和解码。
+3. Monitor 按各绑定的采样频率生成帧任务并写入有界检测队列。队列拥塞时丢弃积压帧，优先保证实时性。
+4. Detection Worker 调用模型。同一个 `frame_id` 只执行一次当前模型推理，再按各绑定的目标标签和置信度阈值分别生成结果。
+5. 命中目标的结果写入 SQLite、保存 JPEG 快照，并进入独立的有界告警队列，由 Alarm Worker 异步发送 Webhook。
+
+### 主动告警上报
+
+```mermaid
+sequenceDiagram
+    participant D as Detection Worker
+    participant S as SQLite / 本地快照
+    participant Q as 告警队列
+    participant W as Alarm Worker
+    participant E as 外部回调服务
+
+    D->>D: 按目标标签和置信度判断
+    alt 命中告警条件
+        D->>S: 保存 JPEG 并写入历史记录
+        D->>Q: 写入告警任务
+        Q->>W: 消费告警任务
+        W->>W: 按算法类型组装结果和抓拍信息
+        loop 失败时最多重试 3 次
+            W->>E: POST resultReportUrl（Basic 鉴权）
+            E-->>W: HTTP 状态及 resultCode
+        end
+    else 未命中
+        D->>D: 仅更新最近结果缓存
+    end
+```
+
+主动上报包含两类消息：
+
+- **任务状态**：Monitor 在启动、运行、异常和停止时向每个绑定的 `statusReportUrl` 主动发送状态。
+- **检测告警**：检测命中后，Alarm Worker 向 `resultReportUrl` 主动发送 `bindId`、`cameraId`、算法类型、检测框、置信度、抓拍时间、图片地址和 Base64 抓拍图；HTTP 或业务返回失败时最多重试 3 次，并采用指数退避。
+
+日志与错误处理贯穿全部模块：API 请求通过 `request_id` 关联访问日志、错误响应和后台日志；日志支持 JSON/文本格式、敏感信息脱敏及按时间轮转。
+
+| 组件 | 技术栈 / 实现 |
+|---|---|
+| Backend | Python 3.12、FastAPI、OpenCV、asyncio、httpx、aiosqlite |
+| Frontend | React、TypeScript、Vite |
+| Pipeline | 有界 `asyncio.Queue`、Detection Worker Pool、Alarm Worker Pool |
+| Protocol | REST API、模型 HTTP API、结果与状态 Webhook |
+| Storage | SQLite（历史记录）、本地文件系统（JPEG 快照） |
+| Observability | 结构化日志、request ID、敏感信息脱敏、按时间轮转 |
+| Deploy | Docker / Docker Compose |
 
 ## 快速开始
 
@@ -46,7 +118,7 @@ LightMonitor 是一个轻量级、配置驱动的**视频流 AI 分析平台**�
 
 ### 配置文件
 
-编辑 \`config/config.yaml\` 配置 RTSP 流、AI 模型地址、告警 Webhook 和存储配置。
+编辑 `config/config.yaml` 配置 RTSP 流、AI 模型地址、队列、告警 Webhook、存储和日志。
 
 \`\`\`yaml
 streams:
@@ -60,9 +132,21 @@ streams:
 detection:
   model_url: "http://process-detection-service/..."
 
-rustfs:
-  endpoint: "localhost:9000"
-  bucket: "lightmonitor"
+queue:
+  maxsize: 16
+  workers: 4
+  max_frame_age_s: 5
+  alarm_maxsize: 100
+  alarm_workers: 2
+
+storage:
+  db_path: "data/lightmonitor.db"
+  snapshots_dir: "data/snapshots"
+
+logging:
+  level: "INFO"
+  format: "json"
+  file_path: "logs/app.log"
 \`\`\`
 
 ### 使用 Docker Compose 启动
@@ -238,11 +322,11 @@ X-Sign: <md5(username + password + base_url)>
 
 **服务侧处理逻辑** (重要):
 
-1. **`liveUrl` 自动重写**: 服务端会用正则 `(\d+\.\d+\.)\d+` 把 IP 段第三位之后的最后一段替换为 `245` (例如 `http://10.0.0.12:8080/...` → `http://10.0.0.245:8080/...`), 用于将请求转发到指定的入口虚拟机。
-2. **异步初始化**: 接口立即返回成功, 真实的 RTSP 连接 / 帧抓取 / 推理在后台任务中启动。
-3. **重复 `bindId` 行为**: 若 `bindId` 已存在, 则**不会**创建新任务, 而是调用 `update_config()` 覆盖配置; 若仅 `live_url` 变化会触发重启。
-4. **流标识唯一性**: 同一 `liveUrl` 可以用不同 `bindId` 创建多个独立任务 (每个任务独立占用一个 RTSP 连接)。`cameraId` 不参与隔离。
-5. **回调时机**: 任务状态变化时会向 `status_report_url` 推送 (启动/停止/错误), 每帧有检测结果时向 `result_report_url` 推送 (重试 3 次, 指数退避)。
+1. **地址处理**: `rtsp://` / `rtsps://` 地址直接连接；HTTP(S) 地址作为视频地址查询接口调用，不再重写请求中的 IP。
+2. **注册语义**: 接口在绑定注册完成后返回；RTSP 连接、帧抓取和推理继续在受管理的后台任务中运行。
+3. **重复 `bindId`**: 使用相同 `cameraId` 时更新标签、采样周期和上报配置；共享视频源运行期间不允许通过更新绑定切换地址。
+4. **一流多任务**: 相同 `cameraId` 与 `liveUrl` 的多个 `bindId` 共享一个物理 RTSP 连接。同一帧、同一全局模型只推理一次，再按各绑定标签分别判断和上报。
+5. **回调处理**: 状态按绑定独立上报；告警进入有界队列，由固定 worker 重试发送，避免无限创建后台任务。
 
 **响应** (`BindResponse`):
 
@@ -278,6 +362,23 @@ X-Sign: <md5(username + password + base_url)>
 ```
 
 **错误码**: `503 Monitor service not initialized`
+
+#### 2.4 通用错误响应
+
+前端 REST API 使用统一错误结构，并通过响应头返回相同的 `X-Request-ID`：
+
+```json
+{
+  "error": {
+    "code": "TASK_NOT_FOUND",
+    "message": "任务不存在",
+    "request_id": "4f13...",
+    "details": null
+  }
+}
+```
+
+服务端日志保留内部异常堆栈，对外响应不会暴露堆栈、鉴权信息或内部响应正文。
 
 ---
 
@@ -336,6 +437,29 @@ X-Sign: <md5(username + password + base_url)>
   }
 }
 ```
+
+## 日志与队列配置
+
+```yaml
+queue:
+  maxsize: 16
+  workers: 4
+  max_frame_age_s: 5
+  shutdown_timeout_s: 10
+  alarm_maxsize: 100
+  alarm_workers: 2
+
+logging:
+  level: INFO
+  format: json          # json | text
+  console_enabled: true
+  file_enabled: true
+  file_path: logs/app.log
+  rotate_when: midnight
+  backup_count: 7
+```
+
+生产日志默认使用 JSON，并包含 `event`、`request_id`、`bind_id`、耗时及重试次数等字段。Authorization、Token、密码和 Base64 图片不会写入日志。
 
 ## 项目结构
 

@@ -4,26 +4,28 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
+import re
+import time
+import uuid
 from contextlib import asynccontextmanager
-from logging.handlers import TimedRotatingFileHandler
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
+from app.api.v1.algo_bind import init_binding_router
+from app.api.v1.algo_bind import router as algo_bind_router
+from app.api.v1.tasks import init_router
+from app.api.v1.tasks import router as tasks_router
 from app.config import get_config
+from app.errors import error_payload, install_exception_handlers
+from app.models import Task
+from app.observability import configure_logging, reset_request_id, set_request_id
 from app.services.alarm import AlarmService
 from app.services.database import DatabaseService
 from app.services.detection import DetectionService
 from app.services.monitor import MonitorService
-from app.api.v1.tasks import init_router, router as tasks_router
-from app.api.v1.algo_bind import router as algo_bind_router, init_binding_router
 
-logging.basicConfig(
-    level=logging.DEBUG,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",   
-    force=True,
-)
 logger = logging.getLogger(__name__)
 
 
@@ -34,68 +36,67 @@ _alarm: AlarmService | None = None
 _database: DatabaseService | None = None
 
 
-def _configure_timed_rotating_handler(config) -> None:
-    """Attach a TimedRotatingFileHandler to the root logger."""
-    log_cfg = config.logging
-    log_path = log_cfg.jsonl_path
-    # Place the application log alongside the JSONL detections file
-    log_dir = os.path.dirname(log_path) or "."
-    os.makedirs(log_dir, exist_ok=True)
-    app_log_path = os.path.join(log_dir, "app.log")
-
-    handler = TimedRotatingFileHandler(
-        app_log_path,
-        when=log_cfg.rotate_when,
-        backupCount=log_cfg.backup_count,
-        encoding="utf-8",
-    )
-    handler.setFormatter(
-        logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s")
-    )
-    logging.getLogger().addHandler(handler)
-    logger.info("TimedRotatingFileHandler configured: %s", app_log_path)
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _monitor, _detection, _alarm, _database
 
-    config = get_config()
-    logger.info("Loaded configuration with %d stream(s)", len(config.streams))
+    _monitor = None
+    _detection = None
+    _alarm = None
+    _database = None
 
-    _configure_timed_rotating_handler(config)
+    config = get_config()
+    configure_logging(config.logging)
+    logger.info(
+        "configuration loaded",
+        extra={
+            "event": "app.configuration.loaded",
+            "stream_count": len(config.streams),
+        },
+    )
 
     # Create the shared async queue with backpressure limit
-    queue: asyncio.Queue = asyncio.Queue(maxsize=config.queue.maxsize)
+    queue: asyncio.Queue[Task] = asyncio.Queue(maxsize=config.queue.maxsize)
 
     _alarm = AlarmService()
     _database = DatabaseService(config.storage.db_path)
-    await _database.start()
-
-    _detection = DetectionService(config, _alarm, queue, _database)
-    _monitor = MonitorService(config, queue)
-
-    init_router(
-        _monitor,
-        _detection,
-        db_service=_database,
-        snapshots_dir=config.storage.snapshots_dir,
+    _detection = DetectionService(
+        config,
+        _alarm,
+        queue,
+        _database,
+        num_workers=config.queue.workers,
     )
-    init_binding_router(_monitor)  # Initialize algo binding with monitor service
+    try:
+        await _database.start()
+        _monitor = MonitorService(config, queue)
 
-    # Start detection consumer and all monitor stream tasks
-    await _detection.start()
-    await _monitor.start_all()
-    logger.info("All services started")
+        init_router(
+            _monitor,
+            _detection,
+            db_service=_database,
+            snapshots_dir=config.storage.snapshots_dir,
+        )
+        init_binding_router(_monitor)
 
-    yield
-
-    # Shutdown
-    await _monitor.stop_all()
-    await _detection.close()
-    await _database.close()
-    await _alarm.close()
-    logger.info("All services stopped")
+        await _detection.start()
+        await _monitor.start_all()
+        logger.info("all services started", extra={"event": "app.started"})
+        yield
+    finally:
+        if _monitor is not None:
+            await _monitor.stop_all()
+        if _detection is not None:
+            await _detection.close()
+        if _database is not None:
+            await _database.close()
+        if _alarm is not None:
+            await _alarm.close()
+        logger.info("all services stopped", extra={"event": "app.stopped"})
+        _monitor = None
+        _detection = None
+        _alarm = None
+        _database = None
 
 
 app = FastAPI(
@@ -104,6 +105,52 @@ app = FastAPI(
     version="2.0.0",
     lifespan=lifespan,
 )
+
+install_exception_handlers(app)
+
+_REQUEST_ID_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
+
+
+@app.middleware("http")
+async def request_context(request: Request, call_next):
+    supplied_id = request.headers.get("X-Request-ID", "")
+    request_id = (
+        supplied_id if _REQUEST_ID_PATTERN.fullmatch(supplied_id) else uuid.uuid4().hex
+    )
+    token = set_request_id(request_id)
+    started = time.perf_counter()
+    try:
+        try:
+            response = await call_next(request)
+        except Exception as exc:
+            logger.exception(
+                "unhandled request error",
+                extra={
+                    "event": "api.request.unhandled_error",
+                    "method": request.method,
+                    "path": request.url.path,
+                    "error_type": type(exc).__name__,
+                },
+            )
+            response = JSONResponse(
+                status_code=500,
+                content=error_payload("INTERNAL_ERROR", "服务内部错误"),
+            )
+        response.headers["X-Request-ID"] = request_id
+        logger.info(
+            "request completed",
+            extra={
+                "event": "api.request.completed",
+                "method": request.method,
+                "path": request.url.path,
+                "status_code": response.status_code,
+                "duration_ms": round((time.perf_counter() - started) * 1000, 2),
+            },
+        )
+        return response
+    finally:
+        reset_request_id(token)
+
 
 app.add_middleware(
     CORSMiddleware,

@@ -4,6 +4,9 @@ export type TaskStatus = {
   status: string;
   labels: string[];
   latest_frame_ts: number | null;
+  last_error_code: string | null;
+  last_error_message: string | null;
+  last_error_at: number | null;
 };
 
 export type Detection = {
@@ -32,7 +35,30 @@ export type HistoryRecord = {
 export type Credentials = { username: string; password: string };
 
 const credentialsKey = 'lightmonitor.credentials';
-const API_BASE_URL = 'http://10.1.0.12:10000';
+const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL ?? '').replace(/\/$/, '');
+
+type ErrorEnvelope = {
+  error?: {
+    code?: string;
+    message?: string;
+    request_id?: string;
+    details?: unknown;
+  };
+  detail?: string;
+};
+
+export class ApiError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+    readonly code: string,
+    readonly requestId?: string,
+    readonly details?: unknown,
+  ) {
+    super(requestId ? `${message}（请求 ID：${requestId}）` : message);
+    this.name = 'ApiError';
+  }
+}
 
 export function getCredentials(): Credentials | null {
   const raw = sessionStorage.getItem(credentialsKey);
@@ -54,14 +80,40 @@ function authHeader(): HeadersInit {
 }
 
 async function request<T>(path: string): Promise<T> {
-  const response = await fetch(`${API_BASE_URL}${path}`, { headers: authHeader() });
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE_URL}${path}`, { headers: authHeader() });
+  } catch (reason) {
+    throw new ApiError(
+      reason instanceof Error ? `无法连接到服务：${reason.message}` : '无法连接到服务。',
+      0,
+      'NETWORK_ERROR',
+    );
+  }
   if (!response.ok) {
-    const message = response.status === 401 || response.status === 403
+    let body: ErrorEnvelope = {};
+    try {
+      body = await response.json() as ErrorEnvelope;
+    } catch {
+      // Non-JSON proxy and gateway responses use the fallback below.
+    }
+    const requestId = body.error?.request_id ?? response.headers.get('X-Request-ID') ?? undefined;
+    const fallback = response.status === 401 || response.status === 403
       ? '认证失败，请检查用户名和密码。'
       : `请求失败（${response.status}）`;
-    throw new Error(message);
+    throw new ApiError(
+      body.error?.message ?? body.detail ?? fallback,
+      response.status,
+      body.error?.code ?? `HTTP_${response.status}`,
+      requestId,
+      body.error?.details,
+    );
   }
-  return response.json() as Promise<T>;
+  try {
+    return await response.json() as T;
+  } catch {
+    throw new ApiError('服务返回了无效的数据格式。', response.status, 'INVALID_RESPONSE');
+  }
 }
 
 export const api = {

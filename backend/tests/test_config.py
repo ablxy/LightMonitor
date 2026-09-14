@@ -1,124 +1,72 @@
-"""Tests for the YAML configuration loader."""
+"""Configuration compatibility and defaults."""
 
-import os
-import tempfile
-
-import pytest
 import yaml
+from app.config import load_config
 
-from app.config import AppConfig, load_config
 
-
-@pytest.fixture
-def sample_yaml(tmp_path):
-    """Write a minimal valid config YAML and return its path."""
-    cfg = {
-        "streams": [
-            {
-                "id": "test-01",
-                "name": "Test Camera",
-                "rtsp_url": "rtsp://127.0.0.1/test",
-                "enabled": True,
-                "frame_extraction": {"fps": 2},
-                "labels": ["person", "car"],
-            }
-        ],
-        "detection": {
-            "model_url": "http://localhost:8501/v1/models/yolo:predict",
-            "auth": {"type": "api_key", "token": "secret"},
-            "confidence_threshold": 0.6,
-        },
-        "alarm": {
-            "enabled": True,
-            "webhook_url": "http://alerts.example.com/api",
-            "auth": {"type": "bearer", "token": "tok"},
-        },
-        "queue": {"maxsize": 50},
-        "minio": {
-            "endpoint": "minio:9000",
-            "access_key": "user",
-            "secret_key": "pass",
-            "bucket": "mybucket",
-            "secure": True,
-        },
-        "logging": {
-            "jsonl_path": "/var/log/detections.jsonl",
-            "rotate_when": "midnight",
-            "backup_count": 14,
-        },
-        "server": {"host": "0.0.0.0", "port": 8000},
-    }
+def test_loads_current_stream_schema(tmp_path):
     path = tmp_path / "config.yaml"
-    path.write_text(yaml.dump(cfg))
-    return str(path)
-
-
-def test_load_config_full(sample_yaml):
-    config = load_config(sample_yaml)
-    assert len(config.streams) == 1
-    assert config.streams[0].bindId == "test-01"
-    assert config.streams[0].cameraId == "Test Camera"
-    assert config.streams[0].live_url == "rtsp://127.0.0.1/test"
-    assert config.streams[0].frame_extraction.fps == 2
-    assert config.streams[0].labels == ["person", "car"]
-    assert config.detection.confidence_threshold == 0.6
-    assert config.detection.auth.type == "api_key"
-    assert config.alarm.enabled is True
-    assert config.alarm.webhook_url == "http://alerts.example.com/api"
-    assert config.queue.maxsize == 50
-    assert config.minio.endpoint == "minio:9000"
-    assert config.minio.bucket == "mybucket"
-    assert config.minio.secure is True
-    assert config.logging.jsonl_path == "/var/log/detections.jsonl"
-    assert config.logging.backup_count == 14
-    assert config.server.port == 8000
-
-
-def test_load_config_defaults(tmp_path):
-    """Config with only required fields should still parse with defaults."""
-    cfg = {
-        "streams": [
+    path.write_text(
+        yaml.safe_dump(
             {
-                "id": "s1",
-                "name": "S1",
-                "rtsp_url": "rtsp://x",
+                "streams": [
+                    {
+                        "bindId": "task-1",
+                        "cameraId": "camera-1",
+                        "live_url": "rtsp://camera/live",
+                        "labels": ["person"],
+                        "report": {},
+                    }
+                ],
+                "queue": {"maxsize": 16, "workers": 2},
+                "logging": {"file_path": "/tmp/lightmonitor.log"},
             }
-        ]
-    }
-    path = tmp_path / "min.yaml"
-    path.write_text(yaml.dump(cfg))
+        ),
+        encoding="utf-8",
+    )
     config = load_config(str(path))
-    assert config.detection.confidence_threshold == 0.5
-    assert config.alarm.enabled is False
-    assert config.queue.maxsize == 100
-    assert config.minio.endpoint == "localhost:9000"
-    assert config.minio.bucket == "lightmonitor"
-    assert config.logging.rotate_when == "midnight"
-    assert config.logging.backup_count == 7
-    assert config.server.host == "0.0.0.0"
+    assert config.streams[0].bindId == "task-1"
+    assert config.streams[0].cameraId == "camera-1"
+    assert config.queue.maxsize == 16
+    assert config.queue.workers == 2
+    assert config.logging.resolved_file_path == "/tmp/lightmonitor.log"
 
 
-def test_load_config_empty(tmp_path):
-    """Empty YAML should produce a valid config with defaults."""
+def test_loads_legacy_stream_field_names(tmp_path):
+    path = tmp_path / "legacy.yaml"
+    path.write_text(
+        yaml.safe_dump(
+            {
+                "streams": [
+                    {"id": "legacy-1", "name": "Legacy", "rtsp_url": "rtsp://old"}
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    stream = load_config(str(path)).streams[0]
+    assert stream.bindId == "legacy-1"
+    assert stream.cameraId == "Legacy"
+    assert stream.live_url == "rtsp://old"
+    assert stream.report.status_report_url is None
+
+
+def test_empty_config_uses_safe_defaults(tmp_path):
     path = tmp_path / "empty.yaml"
-    path.write_text("")
+    path.write_text("", encoding="utf-8")
     config = load_config(str(path))
     assert config.streams == []
-    assert config.detection.confidence_threshold == 0.5
+    assert config.logging.level == "INFO"
+    assert config.queue.max_frame_age_s == 5.0
+    assert config.queue.alarm_workers == 2
 
 
-def test_load_config_multiple_streams(tmp_path):
-    cfg = {
-        "streams": [
-            {"id": "a", "name": "A", "rtsp_url": "rtsp://a", "labels": ["fire"]},
-            {"id": "b", "name": "B", "rtsp_url": "rtsp://b", "enabled": False},
-        ]
-    }
-    path = tmp_path / "multi.yaml"
-    path.write_text(yaml.dump(cfg))
+def test_legacy_jsonl_path_resolves_app_log_next_to_it(tmp_path):
+    path = tmp_path / "config.yaml"
+    detections = tmp_path / "logs" / "detections.jsonl"
+    path.write_text(
+        yaml.safe_dump({"logging": {"jsonl_path": str(detections)}}),
+        encoding="utf-8",
+    )
     config = load_config(str(path))
-    assert len(config.streams) == 2
-    assert config.streams[0].enabled is True
-    assert config.streams[1].enabled is False
-    assert config.streams[0].labels == ["fire"]
-    assert config.streams[1].labels == []
+    assert config.logging.resolved_file_path == str(tmp_path / "logs" / "app.log")

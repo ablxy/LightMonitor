@@ -36,33 +36,36 @@ import pytest
 # ──────────────────────────────────────────────
 # 路径常量
 # ──────────────────────────────────────────────
-BACKEND_DIR = Path(__file__).resolve().parent.parent          # .../backend
-PROJECT_ROOT = BACKEND_DIR.parent                             # .../LightMonitor
+BACKEND_DIR = Path(__file__).resolve().parent.parent  # .../backend
+PROJECT_ROOT = BACKEND_DIR.parent  # .../LightMonitor
 REAL_CONFIG_PATH = str(PROJECT_ROOT / "config" / "config.yaml")
 
 # 真实数据目录（绝对路径，不受 CWD 影响）
-REAL_DB_PATH       = str(BACKEND_DIR / "data" / "lightmonitor.db")
+REAL_DB_PATH = str(BACKEND_DIR / "data" / "lightmonitor.db")
 REAL_SNAPSHOTS_DIR = str(BACKEND_DIR / "data" / "snapshots")
-REAL_LOGS_DIR      = str(BACKEND_DIR / "logs")
-REAL_JSONL_PATH    = str(BACKEND_DIR / "logs" / "detections.jsonl")
+REAL_LOGS_DIR = str(BACKEND_DIR / "logs")
+REAL_JSONL_PATH = str(BACKEND_DIR / "logs" / "detections.jsonl")
 
 # 视频 & 网络
-REAL_VIDEO_PATH  = "/Users/iecon/Desktop/code/LightMonitor/5086645-uhd_3840_2160_30fps.mp4"
-RTSP_PORT        = 8555          # 避免与 e2e test 冲突
+REAL_VIDEO_PATH = (
+    "/Users/iecon/Desktop/code/LightMonitor/5086645-uhd_3840_2160_30fps.mp4"
+)
+RTSP_PORT = 8555  # 避免与 e2e test 冲突
 MOCK_SERVER_PORT = 18769
 
 # 业务参数
-BIND_ID    = "a63c3968d11a477894f66a5d7598f408"
-CAMERA_ID  = "44010624122515010301030001561574"
+BIND_ID = "a63c3968d11a477894f66a5d7598f408"
+CAMERA_ID = "44010624122515010301030001561574"
 ALGO_LABEL = "41814000001"
 
-API_USERNAME="maasadmin"
-API_PASSWORD="Maas@dj0086"
+API_USERNAME = "maasadmin"
+API_PASSWORD = "Maas@dj0086"
 
 
 # ──────────────────────────────────────────────
 # 辅助
 # ──────────────────────────────────────────────
+
 
 def _md5(s: str) -> str:
     return hashlib.md5(s.encode()).hexdigest()
@@ -75,6 +78,7 @@ def _sign(username: str, password: str, url: str) -> str:
 # ──────────────────────────────────────────────
 # Fixtures
 # ──────────────────────────────────────────────
+
 
 @pytest.fixture(scope="module")
 def real_video():
@@ -98,7 +102,7 @@ def mock_http_server(rtsp_server: str):
       POST /status  → 接收状态上报（仅记录，不阻塞）
       POST /result  → 接收告警结果上报（仅记录，不阻塞）
     """
-    received_alarms:   list[dict] = []
+    received_alarms: list[dict] = []
     received_statuses: list[dict] = []
 
     class _Handler(BaseHTTPRequestHandler):
@@ -142,10 +146,10 @@ def mock_http_server(rtsp_server: str):
 
     base = f"http://127.0.0.1:{MOCK_SERVER_PORT}"
     yield {
-        "live_url":          f"{base}/live",
-        "status_url":        f"{base}/status",
-        "result_url":        f"{base}/result",
-        "received_alarms":   received_alarms,
+        "live_url": f"{base}/live",
+        "status_url": f"{base}/status",
+        "result_url": f"{base}/result",
+        "received_alarms": received_alarms,
         "received_statuses": received_statuses,
     }
 
@@ -173,9 +177,9 @@ def real_app_client(mock_http_server):
 
         # 获取配置并注入绝对路径
         cfg = config_module.get_config()
-        cfg.storage.db_path       = REAL_DB_PATH
+        cfg.storage.db_path = REAL_DB_PATH
         cfg.storage.snapshots_dir = REAL_SNAPSHOTS_DIR
-        cfg.logging.jsonl_path    = REAL_JSONL_PATH
+        cfg.logging.jsonl_path = REAL_JSONL_PATH
 
         # 让 get_config() 返回我们修改后的实例（用 side_effect 保持可调用）
         with patch.object(config_module, "get_config", side_effect=lambda: cfg):
@@ -192,6 +196,7 @@ def real_app_client(mock_http_server):
 # 正式测试
 # ──────────────────────────────────────────────
 
+
 def test_real_pipeline(real_app_client, mock_http_server):
     """
     完整真实管道验证：
@@ -205,7 +210,7 @@ def test_real_pipeline(real_app_client, mock_http_server):
     """
     from app.main import _monitor, _database
 
-    BIND_PATH   = "/ai-video-analysis/ai/v1/api/algorithm/bind"
+    BIND_PATH = "/ai-video-analysis/ai/v1/api/algorithm/bind"
     UNBIND_PATH = "/ai-video-analysis/ai/v1/api/algorithm/unbind"
 
     print(f"\n📂 数据库路径: {REAL_DB_PATH}")
@@ -220,10 +225,10 @@ def test_real_pipeline(real_app_client, mock_http_server):
         BIND_PATH,
         json={
             "sourceSystem": "SPY",
-            "bindId":        BIND_ID,
-            "cameraId":      CAMERA_ID,
+            "bindId": BIND_ID,
+            "cameraId": CAMERA_ID,
             "algorithmList": [ALGO_LABEL],
-            "liveUrl":       "http://10.252.93.230:10000/api/sapa/media/live",
+            "liveUrl": "http://10.252.93.230:10000/api/sapa/media/live",
             "report": {
                 "statusReportUrl": "http://10.252.93.230:10000/api/sapa/report/status",
                 "resultReportUrl": "http://10.252.93.230:10000/api/sapa/report/data",
@@ -273,8 +278,10 @@ def test_real_pipeline(real_app_client, mock_http_server):
 
         # 每 10 秒打印一次状态
         if time.time() - last_log >= 10:
-            print(f"  … 仍在等待，已过 {int(time.time() - (deadline - 120)):.0f}s，"
-                  f"队列状态: {task._status.value}")
+            print(
+                f"  … 仍在等待，已过 {int(time.time() - (deadline - 120)):.0f}s，"
+                f"队列状态: {task._status.value}"
+            )
             last_log = time.time()
         time.sleep(1.0)
 
@@ -297,12 +304,13 @@ def test_real_pipeline(real_app_client, mock_http_server):
     detections = json.loads(row["detections"])
     print(f"   detections : {json.dumps(detections, ensure_ascii=False)}")
 
-    assert row["stream_id"]   == BIND_ID
+    assert row["stream_id"] == BIND_ID
     assert row["stream_name"] == CAMERA_ID
 
     image_url: str = row["image_url"]
-    assert image_url.startswith(f"/api/v1/snapshots/{BIND_ID}/"), \
+    assert image_url.startswith(f"/api/v1/snapshots/{BIND_ID}/"), (
         f"image_url 格式异常: {image_url}"
+    )
 
     # ──────────────────────────────────────────
     # Step 5: 验证快照文件
@@ -316,9 +324,7 @@ def test_real_pipeline(real_app_client, mock_http_server):
     # ──────────────────────────────────────────
     # Step 6: GET /api/v1/history 接口验证
     # ──────────────────────────────────────────
-    history_resp = real_app_client.get(
-        f"/api/v1/history?stream_id={BIND_ID}&limit=10"
-    )
+    history_resp = real_app_client.get(f"/api/v1/history?stream_id={BIND_ID}&limit=10")
     assert history_resp.status_code == 200
     history_data = history_resp.json()
     assert len(history_data) >= 1, "/api/v1/history 返回空"
@@ -349,10 +355,10 @@ def test_real_pipeline(real_app_client, mock_http_server):
     unbind_resp = real_app_client.post(
         UNBIND_PATH,
         json={
-            "bindId":        BIND_ID,
-            "cameraId":      CAMERA_ID,
+            "bindId": BIND_ID,
+            "cameraId": CAMERA_ID,
             "algorithmList": [ALGO_LABEL],
-            "sourceSystem":  "SPY",
+            "sourceSystem": "SPY",
         },
         headers={"X-Sign": unbind_sign},
     )
@@ -362,5 +368,3 @@ def test_real_pipeline(real_app_client, mock_http_server):
     print(f"✅ /unbind 成功，任务已清除")
 
     print(f"\n🎉 全流程测试完成！数据已持久化到: {REAL_DB_PATH}")
-
-

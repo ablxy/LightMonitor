@@ -13,9 +13,10 @@ import binascii
 import logging
 import secrets
 
-from fastapi import Request, HTTPException
+from fastapi import HTTPException, Request
 
 from app.config import get_config
+from app.errors import AuthenticationFailedError, AuthenticationRequiredError
 
 logger = logging.getLogger(__name__)
 
@@ -24,9 +25,10 @@ logger = logging.getLogger(__name__)
 # 工具函数
 # ---------------------------------------------------------------------------
 
+
 def encode_basic_token(username: str, password: str) -> str:
     """生成 Basic 认证 Token (不含 'Basic ' 前缀)。"""
-    raw = f"{username}:{password}".encode("utf-8")
+    raw = f"{username}:{password}".encode()
     return base64.b64encode(raw).decode("ascii")
 
 
@@ -39,6 +41,7 @@ def generate_basic_signature(username: str, password: str) -> str:
 # FastAPI 依赖
 # ---------------------------------------------------------------------------
 
+
 async def verify_basic_auth(request: Request) -> bool:
     """
     Basic 鉴权拦截器 (用作 Depends):
@@ -48,33 +51,27 @@ async def verify_basic_auth(request: Request) -> bool:
     expected_username = config.api_auth.username
     expected_password = config.api_auth.password
 
-    auth_header = (
-        request.headers.get("Authorization")
-        or request.headers.get("authorization")
+    auth_header = request.headers.get("Authorization") or request.headers.get(
+        "authorization"
     )
     client_ip = request.client.host if request.client else "Unknown"
 
     # 1. 头缺失 -> 401
     if not auth_header:
-        logger.warning(f"Basic 鉴权失败: 缺少 Authorization 请求头. 来源IP: {client_ip}")
-        raise HTTPException(
-            status_code=401,
-            detail="Missing Authorization header",
-            headers={"WWW-Authenticate": 'Basic realm="LightMonitor"'},
+        logger.warning(
+            "Basic 鉴权失败: 缺少 Authorization 请求头",
+            extra={"event": "auth.basic.missing", "client_ip": client_ip},
         )
+        raise AuthenticationRequiredError("缺少 Authorization 请求头")
 
     # 2. 校验 scheme
     parts = auth_header.strip().split(None, 1)
     if len(parts) != 2 or parts[0].lower() != "basic":
         logger.warning(
-            f"Basic 鉴权失败: Authorization 格式错误 ('{auth_header[:32]}...'). "
-            f"来源IP: {client_ip}"
+            "Basic 鉴权失败: Authorization scheme 无效",
+            extra={"event": "auth.basic.invalid_scheme", "client_ip": client_ip},
         )
-        raise HTTPException(
-            status_code=401,
-            detail="Invalid Authorization scheme; expected 'Basic <base64>'",
-            headers={"WWW-Authenticate": 'Basic realm="LightMonitor"'},
-        )
+        raise AuthenticationRequiredError("Authorization 必须使用 Basic 认证")
 
     token = parts[1].strip()
 
@@ -83,23 +80,22 @@ async def verify_basic_auth(request: Request) -> bool:
         decoded = base64.b64decode(token, validate=True).decode("utf-8")
     except (binascii.Error, UnicodeDecodeError) as exc:
         logger.warning(
-            f"Basic 鉴权失败: base64 解码失败 ({type(exc).__name__}). "
-            f"来源IP: {client_ip}"
+            "Basic 鉴权失败: base64 解码失败",
+            extra={
+                "event": "auth.basic.invalid_base64",
+                "client_ip": client_ip,
+                "error_type": type(exc).__name__,
+            },
         )
-        raise HTTPException(
-            status_code=401,
-            detail="Invalid base64 in Authorization header",
-            headers={"WWW-Authenticate": 'Basic realm="LightMonitor"'},
-        )
+        raise AuthenticationRequiredError("Authorization 凭据编码无效")
 
     # 4. 解析 username:password (只允许出现一次冒号)
     if ":" not in decoded:
-        logger.warning(f"Basic 鉴权失败: 凭据格式错误 (缺少 ':'). 来源IP: {client_ip}")
-        raise HTTPException(
-            status_code=401,
-            detail="Malformed credentials: expected 'username:password'",
-            headers={"WWW-Authenticate": 'Basic realm="LightMonitor"'},
+        logger.warning(
+            "Basic 鉴权失败: 凭据格式错误",
+            extra={"event": "auth.basic.malformed", "client_ip": client_ip},
         )
+        raise AuthenticationRequiredError("Authorization 凭据格式无效")
     username, password = decoded.split(":", 1)
 
     # 5. 常量时间比较, 防止时序攻击
@@ -108,14 +104,10 @@ async def verify_basic_auth(request: Request) -> bool:
 
     if not (user_ok and pass_ok):
         logger.warning(
-            f"Basic 鉴权失败: 用户名或密码不匹配. "
-            f"来源IP: {client_ip}, 提交用户: '{username}'"
+            "Basic 鉴权失败: 用户名或密码不匹配",
+            extra={"event": "auth.basic.rejected", "client_ip": client_ip},
         )
-        raise HTTPException(
-            status_code=403,
-            detail="Invalid username or password",
-            headers={"WWW-Authenticate": 'Basic realm="LightMonitor"'},
-        )
+        raise AuthenticationFailedError()
 
     return True
 
@@ -124,7 +116,7 @@ async def verify_basic_auth(request: Request) -> bool:
 # 旧版 MD5 接口 (仅保留兼容, 路由层已切换为 verify_basic_auth)
 # ---------------------------------------------------------------------------
 
-import hashlib  # noqa: E402  放在文件末尾是因为旧实现要保留
+import hashlib
 
 
 def get_md5(raw_str: str) -> str:
