@@ -14,6 +14,7 @@ import time
 import datetime
 import io
 import logging
+import pytest
 
 # Add backend directory to path so we can import app modules
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -21,7 +22,7 @@ backend_dir = os.path.dirname(current_dir)
 if backend_dir not in sys.path:
     sys.path.insert(0, backend_dir)
 
-import boto3
+boto3 = pytest.importorskip("boto3", reason="manual RustFS dependency is not installed")
 from botocore.client import Config
 from botocore.exceptions import ClientError
 from PIL import Image, ImageDraw
@@ -29,18 +30,24 @@ from PIL import Image, ImageDraw
 from app.config import get_config
 
 # Setup basic logging
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
+)
 logger = logging.getLogger(__name__)
+
 
 def create_dummy_image() -> bytes:
     """Creates a simple JPEG image in memory for testing."""
-    img = Image.new('RGB', (640, 480), color=(73, 109, 137))
+    img = Image.new("RGB", (640, 480), color=(73, 109, 137))
     d = ImageDraw.Draw(img)
-    d.text((10, 10), f"Test RustFS Upload {datetime.datetime.now()}", fill=(255, 255, 0))
-    
+    d.text(
+        (10, 10), f"Test RustFS Upload {datetime.datetime.now()}", fill=(255, 255, 0)
+    )
+
     buf = io.BytesIO()
-    img.save(buf, format='JPEG')
+    img.save(buf, format="JPEG")
     return buf.getvalue()
+
 
 def test_upload():
     try:
@@ -50,7 +57,9 @@ def test_upload():
         return
 
     rc = config.rustfs
-    logger.info(f"Loaded RustFS config: Endpoint={rc.endpoint}, Bucket={rc.bucket}, Secure={rc.secure}")
+    logger.info(
+        f"Loaded RustFS config: Endpoint={rc.endpoint}, Bucket={rc.bucket}, Secure={rc.secure}"
+    )
 
     # Determine endpoint URL with scheme (logic from DetectionService)
     protocol = "https" if rc.secure else "http"
@@ -79,7 +88,9 @@ def test_upload():
     except ClientError as e:
         error_code = e.response.get("Error", {}).get("Code")
         if error_code == "404":
-            logger.warning(f"Bucket '{rc.bucket}' not found. Attempting to create it...")
+            logger.warning(
+                f"Bucket '{rc.bucket}' not found. Attempting to create it..."
+            )
             try:
                 s3.create_bucket(Bucket=rc.bucket)
                 logger.info(f"Bucket '{rc.bucket}' created successfully.")
@@ -87,8 +98,8 @@ def test_upload():
                 logger.error(f"Failed to create bucket: {create_err}")
                 return
         elif error_code == "403":
-             logger.error(f"Access denied to bucket '{rc.bucket}'. Check credentials.")
-             return
+            logger.error(f"Access denied to bucket '{rc.bucket}'. Check credentials.")
+            return
         else:
             logger.error(f"Error checking bucket: {e}")
             return
@@ -98,10 +109,12 @@ def test_upload():
     timestamp_ms = int(time.time() * 1000)
     task_id = "manual-test-task"
     bind_id = "test-stream-001"
-    
+
     object_name = f"{bind_id}/{timestamp_ms}_{task_id}.jpg"
-    
-    logger.info(f"Uploading object to {rc.bucket}/{object_name} ({len(image_bytes)} bytes)...")
+
+    logger.info(
+        f"Uploading object to {rc.bucket}/{object_name} ({len(image_bytes)} bytes)..."
+    )
 
     try:
         s3.put_object(
@@ -130,6 +143,7 @@ def test_upload():
 
     except ClientError as e:
         logger.error(f"Failed to generate presigned URL: {e}")
+
 
 if __name__ == "__main__":
     test_upload()

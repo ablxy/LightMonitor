@@ -1,5 +1,6 @@
 # ── Stage 1: 安装 Python 依赖 ─────────────────────────────────────────────────
-FROM docker.m.daocloud.io/library/python:3.12-slim AS builder
+ARG PYTHON_IMAGE=docker.m.daocloud.io/library/python:3.12-slim
+FROM ${PYTHON_IMAGE} AS builder
 
 WORKDIR /build
 
@@ -22,7 +23,7 @@ RUN python -m pip install \
 
 
 # ── Stage 2: 后端运行时镜像 ───────────────────────────────────────────────────
-FROM docker.m.daocloud.io/library/python:3.12-slim AS backend
+FROM ${PYTHON_IMAGE} AS backend
 
 WORKDIR /app
 

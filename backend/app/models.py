@@ -2,29 +2,33 @@
 
 from __future__ import annotations
 
-from enum import Enum
+import time
 import uuid
+from enum import Enum
 
 from pydantic import BaseModel, Field
 
 from app.config import ReportConfig
 
+
 class MonitorStatus(Enum):
     """
-智能分析任务状态
-0-初始化
-1-启动中
-2-正在运行
-3-已停止
-4-错误
-    Args:
-        Enum (_type_): _description_
+    智能分析任务状态
+    0-初始化
+    1-启动中
+    2-正在运行
+    3-已停止
+    4-错误
+        Args:
+            Enum (_type_): _description_
     """
-    INIT= 0
+
+    INIT = 0
     STARTING = 1
     RUNNING = 2
     STOP = 3
     ERROR = 4
+
 
 class BoundingBox(BaseModel):
     x_min: float
@@ -46,26 +50,29 @@ class FrameResult(BaseModel):
     detections: list[DetectionResult] = Field(default_factory=list)
     alarmed: bool = False
     image_base64: str | None = None
+
+
 class AlarmAttributes(BaseModel):
     """
     Table 1-22: 结构化属性。
     支持算法扩展属性，允许添加任何额外的 KV。
     """
-    model_config = {
-        "extra": "allow"  
-    }
+
+    model_config = {"extra": "allow"}
 
 
 class AlarmResultRequest(BaseModel):
     """
     Table 1-21: 智能分析任务结果上报 Payload。
     """
+
     captureTime: str = Field(..., description="抓拍时间，格式yyyy-MM-dd HH:mm:ss")
     captureBase64: str | None = Field(default=None, description="抓拍全景图Base64编码")
     detectBase64: str | None = Field(default=None, description="识别小图Base64编码")
     desc: str | None = Field(default=None, description="告警描述")
-    attributes: AlarmAttributes = Field(default_factory=AlarmAttributes, description="结构化属性")
-
+    attributes: AlarmAttributes = Field(
+        default_factory=AlarmAttributes, description="结构化属性"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -73,9 +80,8 @@ class AlarmResultRequest(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-
 class TaskConfig(BaseModel):
-    threshold: int | None = None
+    threshold: int | None = Field(default=None, ge=0, le=100)
     holddownTime: int | None = None
     stateReportTime: int | None = None
 
@@ -98,10 +104,10 @@ class BindResponse(BaseModel):
     resultCode: int = 0
     resultDesc: str = "任务下发成功"
 
+
 class UnbindResponse(BaseModel):
     resultCode: int = 0
     resultDesc: str = "解绑1条数据"
-
 
 
 class TaskStatus(BaseModel):
@@ -110,28 +116,37 @@ class TaskStatus(BaseModel):
     status: str  # "running", "error", "offline"
     labels: list[str] = Field(default_factory=list)
     latest_frame_ts: int | None = None
+    last_error_code: str | None = None
+    last_error_message: str | None = None
+    last_error_at: int | None = None
 
 
 class TaskDetail(BaseModel):
     task: TaskStatus
     recent_results: list[FrameResult] = Field(default_factory=list)
 
+
 # ---------------------------------------------------------------------------
 # Internal Task Models
 # ---------------------------------------------------------------------------
 
+
 class Task(BaseModel):
     """Internal task passed from Monitor -> Detection."""
+
     task_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    frame_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     bindId: str
     cameraId: str
     # rtsp_url: str
     timestamp_ms: int
     image_data: bytes
     target_labels: list[str]
+    confidence_threshold: float | None = Field(default=None, ge=0, le=1)
     # 新增：让每个 Task 携带上报地址
     status_report_url: str | None = None
     result_report_url: str | None = None
+    enqueued_at: float = Field(default_factory=time.monotonic, exclude=True)
 
 
 class HistoryRecord(BaseModel):
@@ -141,6 +156,7 @@ class HistoryRecord(BaseModel):
     stream_name: str
     detections: list[DetectionResult]
     image_url: str = ""
+
 
 class UnbindRequest(BaseModel):
     sourceSystem: str

@@ -33,7 +33,9 @@ import json as _json
 
 import pytest
 
-REAL_VIDEO_PATH = "/Users/iecon/Desktop/code/LightMonitor/5086645-uhd_3840_2160_30fps.mp4"
+REAL_VIDEO_PATH = (
+    "/Users/iecon/Desktop/code/LightMonitor/5086645-uhd_3840_2160_30fps.mp4"
+)
 RTSP_PORT = 8554
 MOCK_SERVER_PORT = 18767
 BIND_ID = "e2e_stream_001"
@@ -44,6 +46,7 @@ ALGO_LABEL = "person_detect"  # 需与绑定时 algorithmList 一致
 # ===========================================================
 # 辅助
 # ===========================================================
+
 
 def _md5(s: str) -> str:
     return hashlib.md5(s.encode()).hexdigest()
@@ -56,6 +59,7 @@ def _sign(username: str, password: str, url: str) -> str:
 # ===========================================================
 # 外部基础设施 fixtures
 # ===========================================================
+
 
 @pytest.fixture(scope="module")
 def real_video():
@@ -75,11 +79,25 @@ def rtsp_server(real_video: str):
     proc = subprocess.Popen(
         [
             "ffmpeg",
-            "-re", "-stream_loop", "-1", "-i", real_video,
-            "-vcodec", "libx264", "-preset", "ultrafast",
-            "-tune", "zerolatency", "-g", "10",
-            "-rtsp_transport", "tcp",
-            "-f", "rtsp", "-rtsp_flags", "listen",
+            "-re",
+            "-stream_loop",
+            "-1",
+            "-i",
+            real_video,
+            "-vcodec",
+            "libx264",
+            "-preset",
+            "ultrafast",
+            "-tune",
+            "zerolatency",
+            "-g",
+            "10",
+            "-rtsp_transport",
+            "tcp",
+            "-f",
+            "rtsp",
+            "-rtsp_flags",
+            "listen",
             rtsp_url,
         ],
         stdout=subprocess.PIPE,
@@ -138,18 +156,22 @@ def external_servers(rtsp_server: str):
                     "choices": [
                         {
                             "message": {
-                                "content": json.dumps({
-                                    "detections": [
-                                        {
-                                            "label": ALGO_LABEL,
-                                            "confidence": 0.92,
-                                            "bbox": {
-                                                "x_min": 50.0, "y_min": 80.0,
-                                                "x_max": 300.0, "y_max": 700.0
-                                            },
-                                        }
-                                    ]
-                                })
+                                "content": json.dumps(
+                                    {
+                                        "detections": [
+                                            {
+                                                "label": ALGO_LABEL,
+                                                "confidence": 0.92,
+                                                "bbox": {
+                                                    "x_min": 50.0,
+                                                    "y_min": 80.0,
+                                                    "x_max": 300.0,
+                                                    "y_max": 700.0,
+                                                },
+                                            }
+                                        ]
+                                    }
+                                )
                             }
                         }
                     ]
@@ -174,11 +196,11 @@ def external_servers(rtsp_server: str):
 
     base = f"http://127.0.0.1:{MOCK_SERVER_PORT}"
     yield {
-        "live_url":       f"{base}/live",
-        "status_url":     f"{base}/status",
-        "result_url":     f"{base}/result",
-        "vlm_url":         f"{base}/vlm",
-        "received_alarms":   received_alarms,
+        "live_url": f"{base}/live",
+        "status_url": f"{base}/status",
+        "result_url": f"{base}/result",
+        "vlm_url": f"{base}/vlm",
+        "received_alarms": received_alarms,
         "received_statuses": received_statuses,
         "received_vlm_requests": received_vlm_requests,
     }
@@ -190,13 +212,14 @@ def external_servers(rtsp_server: str):
 # 临时存储 + 配置 fixtures
 # ===========================================================
 
+
 @pytest.fixture(scope="module")
 def temp_dirs(tmp_path_factory):
     base = tmp_path_factory.mktemp("e2e")
     return {
-        "db":        str(base / "test.db"),
+        "db": str(base / "test.db"),
         "snapshots": str(base / "snapshots"),
-        "logs":      str(base / "logs"),
+        "logs": str(base / "logs"),
     }
 
 
@@ -205,7 +228,8 @@ def temp_config(temp_dirs, tmp_path_factory):
     """写入临时 config.yaml，指向临时 DB 和快照目录。"""
     cfg_dir = tmp_path_factory.mktemp("cfg")
     cfg_path = cfg_dir / "config.yaml"
-    cfg_path.write_text(textwrap.dedent(f"""
+    cfg_path.write_text(
+        textwrap.dedent(f"""
         detection:
           model_url: "http://127.0.0.1:18767/vlm"
           model_type: "vlm"
@@ -217,16 +241,17 @@ def temp_config(temp_dirs, tmp_path_factory):
         queue:
           maxsize: 50
         storage:
-          db_path: "{temp_dirs['db']}"
-          snapshots_dir: "{temp_dirs['snapshots']}"
+          db_path: "{temp_dirs["db"]}"
+          snapshots_dir: "{temp_dirs["snapshots"]}"
         logging:
-          jsonl_path: "{temp_dirs['logs']}/detections.jsonl"
+          jsonl_path: "{temp_dirs["logs"]}/detections.jsonl"
           rotate_when: midnight
           backup_count: 7
         api_auth:
           username: "e2eadmin"
           password: "e2epassword"
-    """))
+    """)
+    )
     return str(cfg_path)
 
 
@@ -247,7 +272,7 @@ _MOCK_DETECTIONS = [
 def app_client(external_servers, temp_config):
     import app.config as config_module
     import app.services.detection  # noqa: F401
-    import app.services.monitor    # noqa: F401
+    import app.services.monitor  # noqa: F401
 
     config_module.get_config.cache_clear()
 
@@ -271,6 +296,7 @@ def app_client(external_servers, temp_config):
 # 全流程测试
 # ===========================================================
 
+
 def test_full_pipeline(app_client, external_servers, temp_dirs):
     """
     全流程验证：
@@ -284,7 +310,7 @@ def test_full_pipeline(app_client, external_servers, temp_dirs):
     """
     from app.main import _monitor, _database
 
-    BIND_PATH   = "/ai-video-analysis/ai/v1/api/algorithm/bind"
+    BIND_PATH = "/ai-video-analysis/ai/v1/api/algorithm/bind"
     UNBIND_PATH = "/ai-video-analysis/ai/v1/api/algorithm/unbind"
     username, password = "e2eadmin", "e2epassword"
 
@@ -296,10 +322,10 @@ def test_full_pipeline(app_client, external_servers, temp_dirs):
         BIND_PATH,
         json={
             "sourceSystem": "E2E_TEST",
-            "bindId":        BIND_ID,
-            "cameraId":      CAMERA_ID,
+            "bindId": BIND_ID,
+            "cameraId": CAMERA_ID,
             "algorithmList": [ALGO_LABEL],
-            "liveUrl":       external_servers["live_url"],
+            "liveUrl": external_servers["live_url"],
             "report": {
                 "statusReportUrl": external_servers["status_url"],
                 "resultReportUrl": external_servers["result_url"],
@@ -367,8 +393,9 @@ def test_full_pipeline(app_client, external_servers, temp_dirs):
     detections = _json.loads(row["detections"])
     assert any(d["label"] == ALGO_LABEL for d in detections)
     image_url: str = row["image_url"]
-    assert image_url.startswith(f"/api/v1/snapshots/{BIND_ID}/"), \
+    assert image_url.startswith(f"/api/v1/snapshots/{BIND_ID}/"), (
         f"image_url 格式异常: {image_url}"
+    )
 
     # -------------------------------------------------------
     # Step 5: 断言快照文件存在于磁盘
@@ -382,9 +409,7 @@ def test_full_pipeline(app_client, external_servers, temp_dirs):
     # -------------------------------------------------------
     # Step 6: GET /api/v1/history 接口验证
     # -------------------------------------------------------
-    history_resp = app_client.get(
-        f"/api/v1/history?stream_id={BIND_ID}&limit=10"
-    )
+    history_resp = app_client.get(f"/api/v1/history?stream_id={BIND_ID}&limit=10")
     assert history_resp.status_code == 200
     history_data = history_resp.json()
     assert len(history_data) >= 1, "/api/v1/history 返回空"
@@ -413,7 +438,12 @@ def test_full_pipeline(app_client, external_servers, temp_dirs):
     unbind_sign = _sign(username, password, f"http://testserver{UNBIND_PATH}")
     unbind_resp = app_client.post(
         UNBIND_PATH,
-        json={"bindId": BIND_ID, "cameraId": CAMERA_ID, "algorithmList": [ALGO_LABEL], "sourceSystem": "E2E_TEST"},
+        json={
+            "bindId": BIND_ID,
+            "cameraId": CAMERA_ID,
+            "algorithmList": [ALGO_LABEL],
+            "sourceSystem": "E2E_TEST",
+        },
         headers={"X-Sign": unbind_sign},
     )
     assert unbind_resp.status_code == 200
@@ -423,8 +453,9 @@ def test_full_pipeline(app_client, external_servers, temp_dirs):
     # -------------------------------------------------------
     # Step 10: 断言 VLM 请求已到达
     # -------------------------------------------------------
-    assert len(external_servers["received_vlm_requests"]) >= 1, \
+    assert len(external_servers["received_vlm_requests"]) >= 1, (
         "未收到 VLM 请求，_call_vlm_model 可能未被执行"
+    )
 
     vlm_req = external_servers["received_vlm_requests"][0]
     assert "messages" in vlm_req and len(vlm_req["messages"]) >= 1
@@ -432,6 +463,5 @@ def test_full_pipeline(app_client, external_servers, temp_dirs):
     assert user_msg is not None, "VLM 请求缺少 user 消息"
     content_parts = user_msg.get("content", [])
     assert any(
-        isinstance(p, dict) and p.get("type") == "image_url"
-        for p in content_parts
+        isinstance(p, dict) and p.get("type") == "image_url" for p in content_parts
     ), "VLM 请求未携带 image_url（base64 图片）"

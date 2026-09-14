@@ -15,14 +15,23 @@ detection:
 
 
 queue: 
-  maxsize: 100              # Max frames in the internal async queue
+  maxsize: 16               # Small queue keeps real-time frames fresh
+  workers: 4
+  max_frame_age_s: 5
+  shutdown_timeout_s: 10
+  alarm_maxsize: 100
+  alarm_workers: 2
 
 storage:
   db_path: "data/lightmonitor.db"
   snapshots_dir: "data/snapshots"
 
 logging:
-  jsonl_path: "logs/detections.jsonl"  # JSONL log file path
+  level: "INFO"
+  format: "json"                     # json | text
+  console_enabled: true
+  file_enabled: true
+  file_path: "logs/app.log"
   rotate_when: "midnight"              # Daily log rotation
   backup_count: 7                      # Keep last 7 rotated logs
 

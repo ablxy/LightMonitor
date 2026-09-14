@@ -1,187 +1,122 @@
-"""Tests for service-layer logic (detection, alarm, monitor helpers)."""
+"""Tests for queue, shared-source, and detection behavior."""
 
 import asyncio
-import collections
-import json
-import os
+from unittest.mock import AsyncMock
 
 import pytest
-import yaml
-
-from app.config import load_config
-from app.models import BoundingBox, DetectionResult, FrameResult, Task
+from app.config import (
+    AppConfig,
+    FrameExtractionConfig,
+    ReportConfig,
+    StorageConfig,
+    StreamConfig,
+)
+from app.models import Task
 from app.services.alarm import AlarmService
 from app.services.detection import DetectionService
+from app.services.monitor import MonitorService, StreamTask
 
 
-@pytest.fixture
-def config(tmp_path):
-    cfg = {
-        "streams": [
-            {
-                "id": "s1",
-                "name": "Stream 1",
-                "rtsp_url": "rtsp://127.0.0.1/s1",
-                "enabled": True,
-                "labels": ["person"],
-            }
-        ],
-        "detection": {"model_url": "", "confidence_threshold": 0.5},
-        "alarm": {"enabled": False},
-        "queue": {"maxsize": 10},
-        "minio": {
-            "endpoint": "localhost:9000",
-            "access_key": "minioadmin",
-            "secret_key": "minioadmin",
-            "bucket": "test-bucket",
-            "secure": False,
-        },
-        "logging": {
-            "jsonl_path": str(tmp_path / "detections.jsonl"),
-            "rotate_when": "midnight",
-            "backup_count": 7,
-        },
-    }
-    path = tmp_path / "cfg.yaml"
-    path.write_text(yaml.dump(cfg))
-    return load_config(str(path))
-
-
-@pytest.fixture
-def queue():
-    return asyncio.Queue(maxsize=10)
-
-
-@pytest.fixture
-def detection_service(config, queue):
-    alarm = AlarmService(config.alarm)
-    return DetectionService(config, alarm, queue)
-
-
-@pytest.mark.asyncio
-async def test_process_task_no_model(detection_service, queue):
-    """When model_url is empty, processing a task should succeed with zero detections."""
-    task = Task(
-        bindId="s1",
-        cameraId="Stream 1",
-        image_data=b"\xff\xd8\xff\xe0",
-        timestamp_ms=1700000000000,
-        target_labels=["person"],
+def stream(bind_id: str, *, interval_s: float = 1.0) -> StreamConfig:
+    return StreamConfig(
+        bindId=bind_id,
+        cameraId="camera-1",
+        live_url="rtsp://camera/live",
+        labels=[bind_id],
+        frame_extraction=FrameExtractionConfig(interval_s=interval_s),
+        report=ReportConfig(),
     )
-    await queue.put(task)
-    await detection_service._process_task(task)
-
-    results = detection_service.get_recent_results("s1")
-    assert len(results) == 1
-    assert results[0].stream_id == "s1"
-    assert results[0].detections == []
-    assert results[0].alarmed is False
 
 
-@pytest.mark.asyncio
-async def test_get_recent_results(detection_service, queue):
-    """Results should be stored and retrievable."""
-    for ts in [1000, 2000]:
-        task = Task(
-            bindId="s1",
-            cameraId="Stream 1",
-            image_data=b"\xff",
-            timestamp_ms=ts,
-            target_labels=[],
-        )
-        await detection_service._process_task(task)
-
-    results = detection_service.get_recent_results("s1")
-    assert len(results) == 2
-    # Most recent first
-    assert results[0].timestamp_ms == 2000
-    assert results[1].timestamp_ms == 1000
-
-
-@pytest.mark.asyncio
-async def test_get_recent_results_limit(detection_service, queue):
-    for i in range(10):
-        task = Task(
-            bindId="s1",
-            cameraId="Stream 1",
-            image_data=b"\xff",
-            timestamp_ms=i,
-            target_labels=[],
-        )
-        await detection_service._process_task(task)
-
-    results = detection_service.get_recent_results("s1", limit=3)
-    assert len(results) == 3
-
-
-def test_alarm_service_disabled():
-    """AlarmService should be creatable with alarm disabled."""
-    from app.config import AlarmConfig
-    cfg = AlarmConfig(enabled=False)
-    svc = AlarmService(cfg)
-    assert svc._config.enabled is False
-
-
-def test_monitor_service_creates_tasks(config, queue):
-    from app.services.monitor import MonitorService
-    mon = MonitorService(config, queue)
-    assert "s1" in mon.tasks
-    assert mon.tasks["s1"]._status == "offline"
+def config(tmp_path, streams=None) -> AppConfig:
+    return AppConfig(
+        streams=streams or [],
+        storage=StorageConfig(
+            db_path=str(tmp_path / "history.db"),
+            snapshots_dir=str(tmp_path / "snapshots"),
+        ),
+    )
 
 
 def test_stream_task_interval():
-    """StreamTask should compute interval from fps or interval_s."""
-    from app.config import StreamConfig, FrameExtractionConfig
-    from app.services.monitor import StreamTask
+    queue = asyncio.Queue(maxsize=4)
+    source = StreamTask(stream("task-1", interval_s=0.5), queue)
+    assert source._compute_interval() == 0.5
 
-    q = asyncio.Queue(maxsize=10)
 
-    s1 = StreamConfig(
-        bindId="x", cameraId="X", live_url="rtsp://x",
-        frame_extraction=FrameExtractionConfig(fps=2),
+def test_same_camera_reuses_one_physical_source(tmp_path):
+    first = stream("person", interval_s=1)
+    second = stream("fire", interval_s=5)
+    monitor = MonitorService(config(tmp_path, [first, second]), asyncio.Queue(8))
+    assert len(monitor._sources) == 1
+    assert set(monitor.tasks) == {"person", "fire"}
+    assert monitor._sources["camera-1"].binding_count == 2
+
+
+@pytest.mark.asyncio
+async def test_same_frame_runs_model_once_for_multiple_bindings(tmp_path):
+    cfg = config(tmp_path)
+    alarm = AlarmService()
+    database = AsyncMock()
+    service = DetectionService(cfg, alarm, asyncio.Queue(8), database)
+    service._call_model = AsyncMock(
+        return_value=[{"label": "person", "confidence": 0.6}]
     )
-    t1 = StreamTask(s1, q)
-    assert t1._compute_interval() == 0.5
-
-    s2 = StreamConfig(
-        bindId="y", cameraId="Y", live_url="rtsp://y",
-        frame_extraction=FrameExtractionConfig(interval_s=10),
-    )
-    t2 = StreamTask(s2, q)
-    assert t2._compute_interval() == 10.0
-
-    # Default when nothing is set
-    s3 = StreamConfig(bindId="z", cameraId="Z", live_url="rtsp://z")
-    t3 = StreamTask(s3, q)
-    assert t3._compute_interval() == 1.0
-
-
-def test_queue_backpressure(config, queue):
-    """When queue is full, put_nowait should raise QueueFull."""
-    # Fill the queue to capacity
-    for i in range(10):
-        task = Task(
-            bindId="s1",
-            cameraId="Stream 1",
-            image_data=b"\xff",
-            timestamp_ms=i,
-            target_labels=[],
-        )
-        queue.put_nowait(task)
-
-    assert queue.full()
-
-    # Drop oldest (mimic monitor backpressure)
-    dropped = queue.get_nowait()
-    assert dropped.timestamp_ms == 0
-
-    # Now there is space for one more
-    new_task = Task(
-        bindId="s1",
-        cameraId="Stream 1",
-        image_data=b"\xff",
-        timestamp_ms=9999,
+    first = Task(
+        frame_id="frame-1",
+        bindId="person",
+        cameraId="camera-1",
+        timestamp_ms=1,
+        image_data=b"jpeg",
         target_labels=[],
+        confidence_threshold=0.5,
     )
-    queue.put_nowait(new_task)
-    assert queue.qsize() == 10
+    second = Task(
+        frame_id="frame-1",
+        bindId="fire",
+        cameraId="camera-1",
+        timestamp_ms=1,
+        image_data=b"jpeg",
+        target_labels=[],
+        confidence_threshold=0.8,
+    )
+    await asyncio.gather(service._process_task(first), service._process_task(second))
+    assert service._call_model.await_count == 1
+    assert len(service.get_recent_results("person")[0].detections) == 1
+    assert service.get_recent_results("fire")[0].detections == []
+    await service.close()
+    await alarm.close()
+
+
+@pytest.mark.asyncio
+async def test_expired_frame_is_discarded_and_accounted_for(tmp_path):
+    cfg = config(tmp_path)
+    cfg.queue.max_frame_age_s = 0.01
+    queue = asyncio.Queue(4)
+    alarm = AlarmService()
+    service = DetectionService(cfg, alarm, queue, AsyncMock(), num_workers=1)
+    await service.start()
+    task = Task(
+        bindId="task-1",
+        cameraId="camera-1",
+        timestamp_ms=1,
+        image_data=b"jpeg",
+        target_labels=[],
+        enqueued_at=0,
+    )
+    await queue.put(task)
+    await asyncio.wait_for(queue.join(), timeout=1)
+    assert service.get_recent_results("task-1") == []
+    await service.close()
+    await alarm.close()
+
+
+@pytest.mark.asyncio
+async def test_remove_one_binding_keeps_shared_source(tmp_path):
+    monitor = MonitorService(
+        config(tmp_path, [stream("person"), stream("fire")]),
+        asyncio.Queue(8),
+    )
+    assert await monitor.remove_single_stream("person") is True
+    assert "fire" in monitor.tasks
+    assert len(monitor._sources) == 1

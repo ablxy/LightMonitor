@@ -36,6 +36,7 @@ import pytest
 # Helpers
 # ============================================================
 
+
 def _md5(s: str) -> str:
     return hashlib.md5(s.encode()).hexdigest()
 
@@ -49,7 +50,9 @@ def _make_sign(username: str, password: str, full_url: str) -> str:
 # Fixtures
 # ============================================================
 
-REAL_VIDEO_PATH = "/Users/iecon/Desktop/code/LightMonitor/5086645-uhd_3840_2160_30fps.mp4"
+REAL_VIDEO_PATH = (
+    "/Users/iecon/Desktop/code/LightMonitor/5086645-uhd_3840_2160_30fps.mp4"
+)
 
 
 # @pytest.fixture(scope="module")
@@ -83,7 +86,8 @@ REAL_VIDEO_PATH = "/Users/iecon/Desktop/code/LightMonitor/5086645-uhd_3840_2160_
 def real_video() -> str:
     """使用本地已有的 4K MP4 文件作为 ffmpeg 推流源。"""
     path = Path(REAL_VIDEO_PATH)
-    assert path.exists(), f"视频文件不存在: {REAL_VIDEO_PATH}"
+    if not path.exists():
+        pytest.skip(f"测试视频不存在: {REAL_VIDEO_PATH}")
     assert path.stat().st_size > 0, "视频文件为空"
     print(f"使用测试视频文件: {REAL_VIDEO_PATH} ({path.stat().st_size / 1e6:.2f} MB)")
     return str(path)
@@ -105,16 +109,25 @@ def rtsp_server(real_video: str):
     proc = subprocess.Popen(
         [
             "ffmpeg",
-            "-re",                         # 按实时速率读取输入
-            "-stream_loop", "-1",          # 无限循环
-            "-i", real_video,              # 输入：合成视频文件
-            "-vcodec", "libx264",
-            "-preset", "ultrafast",
-            "-tune", "zerolatency",
-            "-g", "10",                    # 每 10 帧一个关键帧
-            "-rtsp_transport", "tcp",
-            "-f", "rtsp",
-            "-rtsp_flags", "listen",       # ← ffmpeg 作为 RTSP 服务器
+            "-re",  # 按实时速率读取输入
+            "-stream_loop",
+            "-1",  # 无限循环
+            "-i",
+            real_video,  # 输入：合成视频文件
+            "-vcodec",
+            "libx264",
+            "-preset",
+            "ultrafast",
+            "-tune",
+            "zerolatency",
+            "-g",
+            "10",  # 每 10 帧一个关键帧
+            "-rtsp_transport",
+            "tcp",
+            "-f",
+            "rtsp",
+            "-rtsp_flags",
+            "listen",  # ← ffmpeg 作为 RTSP 服务器
             rtsp_url,
         ],
         stdout=subprocess.DEVNULL,
@@ -183,6 +196,7 @@ def app_client(live_url_server):
 @pytest.fixture(scope="module")
 def credentials():
     from app.config import get_config
+
     cfg = get_config()
     return cfg.api_auth.username, cfg.api_auth.password
 
@@ -226,6 +240,7 @@ def credentials():
 # Test 2 — 集成：cv2 直接读 RTSP 流
 # ============================================================
 
+
 def test_rtsp_stream_readable_by_cv2(rtsp_server: str):
     """
     cv2.VideoCapture 直接连接 ffmpeg RTSP 服务端，
@@ -258,6 +273,7 @@ def test_rtsp_stream_readable_by_cv2(rtsp_server: str):
 # ============================================================
 # Test 3 — 完整流程：bind → liveUrl → RTSP → 帧消费 → unbind
 # ============================================================
+
 
 def test_bind_with_live_url_rtsp_full_flow(
     app_client, live_url_server: str, rtsp_server: str, credentials
@@ -300,7 +316,7 @@ def test_bind_with_live_url_rtsp_full_flow(
         "bindId": bind_id,
         "cameraId": camera_id,
         "algorithmList": ["person_detect"],
-        "liveUrl": live_url_server,   # → mock HTTP → 返回 rtsp_server URL
+        "liveUrl": live_url_server,  # → mock HTTP → 返回 rtsp_server URL
         "report": {
             "statusReportUrl": "http://127.0.0.1:18765/status",
             "resultReportUrl": "http://127.0.0.1:18765/result",
@@ -347,7 +363,9 @@ def test_bind_with_live_url_rtsp_full_flow(
         f"  RTSP URL : {rtsp_server}\n"
         f"  liveUrl  : {live_url_server}"
     )
-    assert task.latest_frame_ts > 0, f"latest_frame_ts 应 > 0，实际: {task.latest_frame_ts}"
+    assert task.latest_frame_ts > 0, (
+        f"latest_frame_ts 应 > 0，实际: {task.latest_frame_ts}"
+    )
 
     # ------------------------------------------------------------------
     # Step 5: POST /unbind，验证任务被彻底移除

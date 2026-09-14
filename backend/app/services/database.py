@@ -76,7 +76,7 @@ class DatabaseService:
     # Write
     # ------------------------------------------------------------------
 
-    async def write_record(self, record: "HistoryRecord") -> None:
+    async def write_record(self, record: HistoryRecord) -> None:
         """Insert a HistoryRecord row; silently skips duplicates (OR IGNORE)."""
         assert self._conn is not None, "DatabaseService not started"
         det_json = json.dumps([d.model_dump() for d in record.detections])

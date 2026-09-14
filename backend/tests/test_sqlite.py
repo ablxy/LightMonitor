@@ -23,7 +23,9 @@ if backend_dir not in sys.path:
 from app.models import BoundingBox, DetectionResult, HistoryRecord
 from app.services.database import DatabaseService
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
+)
 logger = logging.getLogger(__name__)
 
 SEPARATOR = "-" * 50
@@ -66,7 +68,13 @@ async def run_tests(db_path: str) -> None:
     logger.info(SEPARATOR)
     logger.info("Test 1: 插入单条记录并回查")
 
-    r1 = _make_record("stream-001", "Camera A", now_ms, ["person"], "/api/v1/snapshots/stream-001/a.jpg")
+    r1 = _make_record(
+        "stream-001",
+        "Camera A",
+        now_ms,
+        ["person"],
+        "/api/v1/snapshots/stream-001/a.jpg",
+    )
     await db.write_record(r1)
 
     rows = await db.query_records(stream_id="stream-001")
@@ -103,11 +111,19 @@ async def run_tests(db_path: str) -> None:
     rows_all = await db.query_records(stream_id="stream-001")
     assert len(rows_all) == 3, f"Expected 3 rows, got {len(rows_all)}"
     # 验证默认按时间降序
-    assert rows_all[0]["timestamp_ms"] >= rows_all[1]["timestamp_ms"] >= rows_all[2]["timestamp_ms"]
+    assert (
+        rows_all[0]["timestamp_ms"]
+        >= rows_all[1]["timestamp_ms"]
+        >= rows_all[2]["timestamp_ms"]
+    )
     logger.info("PASS – 3 条记录按时间降序返回")
 
-    rows_filtered = await db.query_records(stream_id="stream-001", start_ms=now_ms - 6000)
-    assert len(rows_filtered) == 2, f"Expected 2 rows in time range, got {len(rows_filtered)}"
+    rows_filtered = await db.query_records(
+        stream_id="stream-001", start_ms=now_ms - 6000
+    )
+    assert len(rows_filtered) == 2, (
+        f"Expected 2 rows in time range, got {len(rows_filtered)}"
+    )
     logger.info("PASS – 时间范围过滤正确，返回 2 条")
 
     # ------------------------------------------------------------------ #
@@ -126,8 +142,12 @@ async def run_tests(db_path: str) -> None:
     assert len(rows_s1) == 3
     assert len(rows_s2) == 1
     assert len(rows_no_filter) == 4
-    logger.info("PASS – stream-001: %d 条, stream-002: %d 条, 全部: %d 条",
-                len(rows_s1), len(rows_s2), len(rows_no_filter))
+    logger.info(
+        "PASS – stream-001: %d 条, stream-002: %d 条, 全部: %d 条",
+        len(rows_s1),
+        len(rows_s2),
+        len(rows_no_filter),
+    )
 
     # ------------------------------------------------------------------ #
     # Test 5: limit 参数生效
@@ -136,7 +156,9 @@ async def run_tests(db_path: str) -> None:
     logger.info("Test 5: limit 参数限制返回数量")
 
     rows_limited = await db.query_records(limit=2)
-    assert len(rows_limited) == 2, f"Expected 2 rows with limit=2, got {len(rows_limited)}"
+    assert len(rows_limited) == 2, (
+        f"Expected 2 rows with limit=2, got {len(rows_limited)}"
+    )
     logger.info("PASS – limit=2 生效，返回 2 条")
 
     # ------------------------------------------------------------------ #
